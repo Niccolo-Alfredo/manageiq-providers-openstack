@@ -51,15 +51,15 @@ class OpenstackRabbitEventMonitor < OpenstackEventMonitor
       connection.start
       return true
     rescue Bunny::AuthenticationFailureError => e
-      $log.info("MIQ(#{name}.#{__method__}) Failed testing rabbit amqp connection: #{e.message}")
-      $log.error("Credentials Error: Login failed due to a bad username or password.") if $log
+      $log.info("(Target Refresh) - MIQ(#{name}.#{__method__}) Failed testing rabbit amqp connection: #{e.message}")
+      $log.error("(Target Refresh) - Credentials Error: Login failed due to a bad username or password.") if $log
     rescue Bunny::TCPConnectionFailedForAllHosts => e
-      $log.error("Socket error: #{e.message}") if $log
+      $log.error("(Target Refresh) - Socket error: #{e.message}") if $log
     rescue => e
-      log_prefix = "MIQ(#{name}.#{__method__}) Failed testing rabbit amqp connection for #{options[:hostname]}. "
-      $log.info("#{log_prefix} The Openstack AMQP service may be using a different provider."\
+      log_prefix = "(Target Refresh) - MIQ(#{name}.#{__method__}) Failed testing rabbit amqp connection for #{options[:hostname]}. "
+      $log.info("(Target Refresh) - #{log_prefix} The Openstack AMQP service may be using a different provider."\
                 " Enable debug logging to see connection exception.") if $log
-      $log.debug("#{log_prefix} Exception: #{e}") if $log
+      $log.debug("(Target Refresh) - #{log_prefix} Exception: #{e}") if $log
     ensure
       connection.close if connection.respond_to? :close
     end
@@ -93,10 +93,10 @@ class OpenstackRabbitEventMonitor < OpenstackEventMonitor
     subscribe_queues
     while @collecting_events
       @events_array_mutex.synchronize do
-        $log.debug("MIQ(#{self.class.name}) Yielding #{@events.size} events to"\
-                   " event_catcher: #{@events.map { |e| e.payload["event_type"] }}") if $log
+        $log.debug("(Target Refresh) - MIQ(#{self.class.name}) Yielding #{@events.size} events to"\
+                   " event_catcher") if $log
         yield @events
-        $log.debug("MIQ(#{self.class.name}) Clearing events") if $log
+        $log.debug("(Target Refresh) - MIQ(#{self.class.name}) Clearing events") if $log
         @events.clear
       end
       sleep 5
@@ -168,11 +168,11 @@ class OpenstackRabbitEventMonitor < OpenstackEventMonitor
           event = openstack_event(delivery_info, metadata, payload)
           @events_array_mutex.synchronize do
             @events << event
-            $log.debug("MIQ(#{self.class.name}##{__method__}) Received Rabbit (amqp) event"\
-                       " on #{exchange} from #{@options[:hostname]}: #{payload["event_type"]}") if $log
+            $log.debug("(Target Refresh) - MIQ(#{self.class.name}##{__method__}) Received Rabbit (amqp) event"\
+                       " on #{exchange} from #{@options[:hostname]}") if $log
           end
         rescue e
-          $log.error("MIQ(#{self.class.name}##{__method__}) Exception receiving Rabbit (amqp)"\
+          $log.error("(Target Refresh) - MIQ(#{self.class.name}##{__method__}) Exception receiving Rabbit (amqp)"\
                      " event on #{exchange} from #{@options[:hostname]}: #{e}") if $log
         end
       end

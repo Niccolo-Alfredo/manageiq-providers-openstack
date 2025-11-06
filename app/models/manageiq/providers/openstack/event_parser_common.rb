@@ -1,3 +1,4 @@
+
 module ManageIQ::Providers::Openstack::EventParserCommon
   def self.event_to_hash(event, ems_id)
     content = message_content(event)
@@ -5,9 +6,8 @@ module ManageIQ::Providers::Openstack::EventParserCommon
     payload = content.fetch("payload", {})
 
     log_header = "ems_id: [#{ems_id}] " unless ems_id.nil?
-    _log.debug("#{log_header}event: [#{event_type}]") if $log && $log.debug?
+    _log.debug("(Target Refresh) - #{log_header}event: [#{event_type}]") if $log && $log.debug?
 
-    # attributes that are common to all notifications
     event_hash = {
       :event_type => event_type,
       :source     => "OPENSTACK",
@@ -15,7 +15,7 @@ module ManageIQ::Providers::Openstack::EventParserCommon
       :timestamp  => content["timestamp"],
       :username   => content["_context_user_name"],
       :full_data  => event,
-      :ems_id     => ems_id
+      :ems_id     => ems_idc
     }
 
     yield(event_hash, payload) if block_given?
@@ -27,14 +27,23 @@ module ManageIQ::Providers::Openstack::EventParserCommon
     # If this is an EmsEvent record, pull out the full_data
     event = event.full_data if event.respond_to?(:full_data)
 
-    if (oslo_message = event.fetch_path(:content, 'oslo.message'))
+    # Extract content - support both Symbol and String keys
+    content = event.fetch(:content, nil) || event.fetch('content', {})
+
+    # Look for oslo.message with both Symbol and String keys
+    oslo_message = content[:'oslo.message'] || content['oslo.message']
+    
+    if oslo_message
       begin
-        JSON.parse(oslo_message)
-      rescue JSON::ParserError
+        parsed = JSON.parse(oslo_message)
+        _log.debug("(Target Refresh) - Oslo message parsed successfully for event: #{parsed['event_type']}") if $log && $log.debug?
+        parsed
+      rescue JSON::ParserError => e
+        _log.warn("(Target Refresh) - Failed to parse Oslo message: #{e.message}") if $log
         {}
       end
     else
-      event.fetch(:content, {})
+      content
     end
   end
 end

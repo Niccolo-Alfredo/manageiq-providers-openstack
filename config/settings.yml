@@ -5,14 +5,17 @@
     :heat:
       :is_global_admin: false
     :parallel_thread_limit: 0
+    :allow_targeted_refresh: true
   :openstack_network:
     :is_admin: false
     :refresh_interval: 0
+    :allow_targeted_refresh: true
   :openstack_infra:
     :is_admin: false
   :cinder:
     :is_admin: false
     :refresh_interval: 0
+    :allow_targeted_refresh: true
 :ems:
   :ems_openstack:
     :excon:
@@ -134,12 +137,11 @@
   :worker_base:
     :event_catcher:
       :event_catcher_openstack:
-        :poll: 15.seconds
+        :poll: 10.seconds
         :topics:
-          :nova: notifications.*
-          :cinder: notifications.*
-          :glance: notifications.*
-          :heat: notifications.*
+          :keystone: notifications.info
+          :nova: notifications.info
+          :glance: notifications.info
         :duration: 10.seconds
         :capacity: 50
         :amqp_port: 5672
@@ -152,12 +154,9 @@
           :topic_name: anycast/ceilometer/event.sample
           :event_types_regex: '\A(aggregate|compute\.instance|identity\.project|image|keypair|orchestration\.stack|servergroup|snapshot)'
       :event_catcher_openstack_cinder:
-        :poll: 15.seconds
+        :poll: 10.seconds
         :topics:
-          :nova: notifications.*
-          :cinder: notifications.*
-          :glance: notifications.*
-          :heat: notifications.*
+          :cinder: notifications.info
         :duration: 10.seconds
         :capacity: 50
         :amqp_port: 5672
@@ -170,7 +169,7 @@
           :topic_name: anycast/ceilometer/event.sample
           :event_types_regex: '\A(volume|snapshot|backup)'
       :event_catcher_openstack_infra:
-        :poll: 15.seconds
+        :poll: 10.seconds
         :topics:
           :nova: notifications.*
           :cinder: notifications.*
@@ -186,7 +185,7 @@
         :ceilometer:
           :event_types_regex: '\A(?!firewall|floatingip|gateway|net|port|router|subnet|security_group|vpn)'
       :event_catcher_openstack_network:
-        :poll: 15.seconds
+        :poll: 10.seconds
         :topics:
           :neutron: "notifications.*"
         :duration: 10.seconds
