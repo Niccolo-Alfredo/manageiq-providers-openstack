@@ -15,7 +15,7 @@ module ManageIQ::Providers::Openstack::EventParserCommon
       :timestamp  => content["timestamp"],
       :username   => content["_context_user_name"],
       :full_data  => event,
-      :ems_id     => ems_idc
+      :ems_id     => ems_id
     }
 
     yield(event_hash, payload) if block_given?
