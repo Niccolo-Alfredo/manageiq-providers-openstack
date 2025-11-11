@@ -49,11 +49,11 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::EventTarget
     volume_id = event_payload['volume_id']
     
     if volume_id
-      add_target(target_collection, :cloud_volumes, volume_id)
+      add_target(target_collection, :cloud_volumes, volume_id, :tenant_id => @tenant_id)
       
       # Bootable volumes are also modeled as volume templates for VM provisioning
       if volume_is_bootable?
-        add_target(target_collection, :volume_templates, volume_id)
+        add_target(target_collection, :volume_templates, volume_id, :tenant_id => @tenant_id)
       end
     end
   end
@@ -62,11 +62,11 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::EventTarget
     return unless @tenant_id
     
     snapshot_id = event_payload['snapshot_id']
-    add_target(target_collection, :cloud_volume_snapshots, snapshot_id) if snapshot_id
+    add_target(target_collection, :cloud_volume_snapshots, snapshot_id, :tenant_id => @tenant_id) if snapshot_id
     
     # Snapshots are always related to a parent volume
     volume_id = event_payload['volume_id']
-    add_target(target_collection, :cloud_volumes, volume_id) if volume_id
+    add_target(target_collection, :cloud_volumes, volume_id, :tenant_id => @tenant_id) if volume_id
   end
 
   def collect_backup_references!(target_collection)
@@ -76,16 +76,15 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::EventTarget
     
     if backup_id
       # Prefer specific backup targeting when ID is available
-      add_target(target_collection, :cloud_volume_backups, backup_id)
+      add_target(target_collection, :cloud_volume_backups, backup_id, :tenant_id => @tenant_id)
     else
       # Fallback for older Panko notifications without backup_id
-      # This will trigger a full backup collection refresh
-      add_target(target_collection, :cloud_volume_backups, nil)
+      add_target(target_collection, :cloud_volume_backups, nil, :tenant_id => @tenant_id)
     end
     
     # Backups are always related to a parent volume
     volume_id = event_payload['volume_id']
-    add_target(target_collection, :cloud_volumes, volume_id) if volume_id
+    add_target(target_collection, :cloud_volumes, volume_id, :tenant_id => @tenant_id) if volume_id
   end
 
   def volume_is_bootable?
@@ -99,8 +98,8 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::EventTarget
     target_collection.select { |_target_class, references| references[:manager_ref].present? }
   end
 
-  def add_target(target_collection, association, ref)
-    target_collection.add_target(:association => association, :manager_ref => {:ems_ref => ref})
+  def add_target(target_collection, association, ref, options = {})
+    target_collection.add_target(:association => association, :manager_ref => {:ems_ref => ref}, :options => options)
   end
 
   def event_payload
