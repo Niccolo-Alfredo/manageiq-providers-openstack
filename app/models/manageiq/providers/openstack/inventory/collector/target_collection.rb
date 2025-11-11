@@ -252,7 +252,7 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
     # we will just refresh all the backups if we get an event.
     return [] if references(:cloud_volume_backups).blank?
     return @cloud_volume_backups if @cloud_volume_backups.any?
-    @cloud_volume_backups = cinder_service.handled_list(:list_backups_detailed, {:__request_body_index => "backups"}, cinder_admin?)
+    @cloud_volume_backups = volume_service.handled_list(:list_backups_detailed, {:__request_body_index => "backups"}, cinder_admin?)
   end
 
   def scoped_get_volume(volume_id, tenant_id)
