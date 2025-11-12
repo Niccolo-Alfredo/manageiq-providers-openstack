@@ -14,7 +14,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::EventTargetParser
   def parse_ems_event_targets(ems_event)
     $log.debug("(Target Refresh) - MIQ(#{self.class.name}) Processing network event: #{ems_event.event_type}") if $log
     
-    target_collection = InventoryTarget Refresh::TargetCollection.new(:manager => ems_event.ext_management_system.parent_manager, :event => ems_event)
+    target_collection = InventoryRefresh::TargetCollection.new(:manager => ems_event.ext_management_system.parent_manager, :event => ems_event)
 
     # there's almost always a tenant id regardless of event type
     collect_identity_tenant_references!(target_collection)
