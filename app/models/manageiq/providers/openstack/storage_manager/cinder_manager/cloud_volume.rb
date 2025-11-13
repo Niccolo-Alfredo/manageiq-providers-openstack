@@ -26,9 +26,11 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
           :id         => 'size',
           :label      => _('Size (in bytes)'),
           :type       => 'number',
-          :step       => 1.gigabytes,
+          :step       => 1,
+          :min        => 1,
           :isRequired => true,
-          :validate   => [{:type => 'required'}, {:type => 'min-number-value', :value => 1, :message => _('Size must be greater than or equal to 1')}],
+          :validate   => [{:type => 'required'}],
+          :value      => 1,
         },
         {
           :component    => 'select',
@@ -76,17 +78,24 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
   end
 
   def params_for_update
+    current_size_gib = size_gib
+    
     {
       :fields => [
         {
-          :component  => 'text-field',
-          :name       => 'size',
-          :id         => 'size',
-          :label      => _('Size (in bytes)'),
-          :type       => 'number',
-          :step       => 1.gigabytes,
-          :isRequired => true,
-          :validate   => [{:type => 'required'}, {:type => 'min-number-value', :value => 1, :message => _('Size must be greater than or equal to 1')}],
+          :component   => 'text-field',
+          :name        => 'size_gib',
+          :id          => 'size_gib',
+          :label       => _('Size (in bytes)'),
+          :type        => 'number',
+          :step        => 1,
+          :min         => current_size_gib,
+          :isRequired  => true,
+          :validate    => [
+            {:type => 'required'},
+            {:type => 'min-number-value', :value => current_size_gib}
+          ],
+          :initialValue => current_size_gib,
         },
         {
           :component  => 'select',
@@ -173,6 +182,10 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
 
   def raw_update_volume(options)
     options = options.symbolize_keys
+    
+    if options[:size_gib]
+      options[:size] = options.delete(:size_gib).to_i
+    end
 
     with_notification(:cloud_volume_update, :options => {:subject => self}) do
       with_provider_object do |volume|
@@ -184,7 +197,6 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
     end
   rescue => e
     parsed_error = parse_error_message_from_fog_response(e)
-
     _log.error("volume=[#{name}], error: #{parsed_error}")
     raise MiqException::MiqVolumeUpdateError, parsed_error, e.backtrace
   end
@@ -278,6 +290,14 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
 
   def with_provider_connection
     super(cinder_connection_options)
+  end
+
+  def size_gib
+    size / 1.gigabyte
+  end
+
+  def size_gib=(value)
+    self.size = value.to_i * 1.gigabyte
   end
 
   def self.cinder_connection_options(cloud_tenant = nil)
