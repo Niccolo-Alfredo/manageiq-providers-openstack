@@ -30,7 +30,7 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
           :min        => 1,
           :isRequired => true,
           :validate   => [{:type => 'required'}],
-          :value      => 1,
+          :value      => 0,
         },
         {
           :component    => 'select',
