@@ -143,14 +143,7 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
 
   def params_for_attach
     {
-      :fields => [
-        {
-          :component => 'text-field',
-          :name      => 'device_mountpoint',
-          :id        => 'device_mountpoint',
-          :label     => _('Device Mountpoint')
-        }
-      ]
+      :fields => []
     }
   end
 

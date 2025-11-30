@@ -686,7 +686,9 @@ class ManageIQ::Providers::Openstack::CloudManager < ManageIQ::Providers::CloudM
 
   def vm_attach_volume(vm, options)
     volume = CloudVolume.find_by(:id => options[:volume_id])
-    volume.raw_attach_volume(vm.ems_ref, options[:device])
+    # [TEMPORARY FIX - Client Error Prevention] Device mountpoint passing is disabled to prevent user errors, 
+    # as OpenStack automatically assigns the correct device.
+    volume.raw_attach_volume(vm.ems_ref, nil) 
   end
 
   def vm_detach_volume(vm, options)
