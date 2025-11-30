@@ -91,10 +91,7 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
           :step        => 1,
           :min         => current_size_gib,
           :isRequired  => true,
-          :validate    => [
-            {:type => 'required'},
-            {:type => 'min-number-value', :value => current_size_gib}
-          ],
+          :validate    => [{:type => 'required'}],
           :initialValue => current_size_gib,
         },
         {
@@ -183,9 +180,7 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
   def raw_update_volume(options)
     options = options.symbolize_keys
     
-    if options[:size_gib]
-      options[:size] = options.delete(:size_gib).to_i
-    end
+    options[:size] = options.delete(:size_gib).to_i if options[:size_gib]
 
     with_notification(:cloud_volume_update, :options => {:subject => self}) do
       with_provider_object do |volume|
@@ -294,10 +289,6 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
 
   def size_gib
     size / 1.gigabyte
-  end
-
-  def size_gib=(value)
-    self.size = value.to_i * 1.gigabyte
   end
 
   def self.cinder_connection_options(cloud_tenant = nil)
