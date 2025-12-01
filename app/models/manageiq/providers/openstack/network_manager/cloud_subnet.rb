@@ -24,6 +24,9 @@ class ManageIQ::Providers::Openstack::NetworkManager::CloudSubnet < ::CloudSubne
   end
 
   def self.params_for_create(ems)
+    accessible_cloudTenants = accessible_resources_for_user(ems, :cloud_tenants)
+    accessible_cloudNetworks = accessible_resources_for_user(ems, :cloud_networks)
+
     {
       :fields => [
         {
@@ -34,7 +37,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::CloudSubnet < ::CloudSubne
           :validate     => [{:type => 'required'}],
           :includeEmpty => true,
           :isRequired   => true,
-          :options      => ems.cloud_tenants.map do |ct|
+          :options      => accessible_cloudTenants.map do |ct|
             {
               :label => ct.name,
               :value => ct.id.to_s,
@@ -49,7 +52,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::CloudSubnet < ::CloudSubne
           :isRequired   => true,
           :includeEmpty => true,
           :validate     => [{:type => 'required'}],
-          :options      => ems.cloud_networks.map do |cvt|
+          :options      => accessible_cloudNetworks.map do |cvt|
             {
               :label => cvt.name,
               :value => cvt.id.to_s,
@@ -125,6 +128,9 @@ class ManageIQ::Providers::Openstack::NetworkManager::CloudSubnet < ::CloudSubne
   end
 
   def params_for_update
+    accessible_cloudTenants = accessible_resources_for_user(ext_management_system, :cloud_tenants)
+    accessible_cloudNetworks = accessible_resources_for_user(ext_management_system, :cloud_networks)
+
     {
       :fields => [
         {
@@ -136,7 +142,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::CloudSubnet < ::CloudSubne
           :includeEmpty => true,
           :isRequired   => true,
           :isDisabled   => true,
-          :options      => ext_management_system.cloud_tenants.map do |ct|
+          :options      => accessible_cloudTenants.map do |ct|
             {
               :label => ct.name,
               :value => ct.id,
@@ -152,7 +158,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::CloudSubnet < ::CloudSubne
           :includeEmpty => true,
           :isDisabled   => true,
           :validate     => [{:type => 'required'}],
-          :options      => ext_management_system.cloud_networks.map do |cvt|
+          :options      => accessible_cloudNetworks.map do |cvt|
             {
               :label => cvt.name,
               :value => cvt.id,

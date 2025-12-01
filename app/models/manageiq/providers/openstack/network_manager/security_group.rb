@@ -20,6 +20,8 @@ class ManageIQ::Providers::Openstack::NetworkManager::SecurityGroup < ::Security
   end
 
   def self.params_for_create(ems)
+    accessible_cloudTenants = accessible_resources_for_user(ems, :cloud_tenants)
+
     {
       :fields => [
         {
@@ -62,7 +64,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::SecurityGroup < ::Security
             :message => _('Required'),
           }],
           :isRequired      => true,
-          :options         => ems.cloud_tenants.map do |ct|
+          :options         => accessible_cloudTenants.map do |ct|
             {
               :label => ct.name,
               :value => ct.id.to_s,
@@ -76,6 +78,9 @@ class ManageIQ::Providers::Openstack::NetworkManager::SecurityGroup < ::Security
   end
 
   def params_for_update
+    accessible_cloudTenants = accessible_resources_for_user(ext_management_system, :cloud_tenants)
+    accessible_securityGroups = accessible_resources_for_user(ext_management_system, :security_groups)
+
     {
       :fields => [
         {
@@ -119,7 +124,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::SecurityGroup < ::Security
             :message => _('Required'),
           }],
           :isRequired      => true,
-          :options         => ext_management_system.cloud_tenants.map do |ct|
+          :options         => accessible_cloudTenants.map do |ct|
             {
               :label => ct.name,
               :value => ct.id.to_s,
@@ -212,7 +217,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::SecurityGroup < ::Security
                   :id           => 'source_security_group_id',
                   :label        => _('Remote Security Group (name - ref)'),
                   :includeEmpty => true,
-                  :options      => ext_management_system.security_groups.map do |sg|
+                  :options      => accessible_securityGroups.map do |sg|
                     {
                       :label => "#{sg.name} - #{sg.ems_ref}",
                       :value => sg.id.to_s,

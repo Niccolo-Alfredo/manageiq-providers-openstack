@@ -22,6 +22,8 @@ class ManageIQ::Providers::Openstack::NetworkManager::FloatingIp < ::FloatingIp
   end
 
   def self.params_for_create(ems)
+    accessible_cloudTenants = accessible_resources_for_user(ems, :cloud_tenants)
+
     {
       :fields => [
         {
@@ -56,7 +58,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::FloatingIp < ::FloatingIp
             :type    => 'required',
             :message => _('Required'),
           }],
-          :options         => ems.cloud_tenants.map do |ct|
+          :options         => accessible_cloudTenants.map do |ct|
             {
               :label => ct.name,
               :value => ct.id.to_s,
@@ -99,6 +101,8 @@ class ManageIQ::Providers::Openstack::NetworkManager::FloatingIp < ::FloatingIp
   end
 
   def params_for_update
+    accessible_cloudTenants = accessible_resources_for_user(ext_management_system, :cloud_tenants)
+
     {
       :component => 'sub-form',
       :id        => 'placement',
@@ -138,7 +142,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::FloatingIp < ::FloatingIp
             :message => _('Required'),
           }],
           :isDisabled      => !!id,
-          :options         => ext_management_system.cloud_tenants.map do |ct|
+          :options         => accessible_cloudTenants.map do |ct|
             {
               :label => ct.name,
               :value => ct.id.to_s,

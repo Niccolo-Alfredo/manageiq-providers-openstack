@@ -30,6 +30,8 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
   supports :remove_interface
 
   def self.params_for_create(ems)
+    accessible_cloudTenants = accessible_resources_for_user(ems, :cloud_tenants)
+
     {
       :fields => [
         {
@@ -45,7 +47,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
             :message => _('Required'),
           }],
           :isRequired      => true,
-          :options         => ems.cloud_tenants.map do |ct|
+          :options         => accessible_cloudTenants.map do |ct|
             {
               :label => ct.name,
               :value => ct.id.to_s,
@@ -138,6 +140,8 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
   end
 
   def params_for_update
+    accessible_cloudTenants = accessible_resources_for_user(ext_management_system, :cloud_tenants)
+
     {
       :fields => [
         {
@@ -150,7 +154,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
           :isRequired      => true,
           :validateOnMount => true,
           :isDisabled      => !!id,
-          :options         => ext_management_system.cloud_tenants.map do |ct|
+          :options         => accessible_cloudTenants.map do |ct|
             {
               :label => ct.name,
               :value => ct.id.to_s,

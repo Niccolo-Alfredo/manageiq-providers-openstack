@@ -24,6 +24,8 @@ class ManageIQ::Providers::Openstack::NetworkManager::CloudNetwork < ::CloudNetw
   end
 
   def self.params_for_create(ems)
+    accessible_cloudTenants = accessible_resources_for_user(ems, :cloud_tenants)
+
     {
       :fields => [
         {
@@ -44,7 +46,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::CloudNetwork < ::CloudNetw
                 :type    => 'required',
                 :message => _('Required'),
               }],
-              :options         => ems.cloud_tenants.map do |ct|
+              :options         => accessible_cloudTenants.map do |ct|
                 {
                   :label => ct.name,
                   :value => ct.id.to_s,
@@ -237,6 +239,8 @@ class ManageIQ::Providers::Openstack::NetworkManager::CloudNetwork < ::CloudNetw
   end
 
   def params_for_update
+    accessible_cloudTenants = accessible_resources_for_user(ext_management_system, :cloud_tenants)
+    
     {
       :fields => [
         {
@@ -258,7 +262,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::CloudNetwork < ::CloudNetw
                 :message => _('Required'),
               }],
               :isDisabled      => !!id,
-              :options         => ext_management_system.cloud_tenants.map do |ct|
+              :options         => accessible_cloudTenants.map do |ct|
                 {
                   :label => ct.name,
                   :value => ct.id.to_s,

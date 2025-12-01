@@ -18,9 +18,26 @@ module ManageIQ::Providers::Openstack::HelperMethods
     self.class.with_notification(type, :options => options, &block)
   end
 
+  def accessible_resources_for_user(ems, association, user = User.current_user)
+    self.class.accessible_resources_for_user(ems, association, user)
+  end
+
   module ClassMethods
     def openstack_proxy
       ManageIQ::Providers::Openstack::CloudManager.http_proxy_uri&.to_s
+    end
+
+    # Returns resources accessible to the user, dynamically determined by the association name.
+    def accessible_resources_for_user(ems, association, user = User.current_user)
+      _log.debug "[RBAC] accessible_resources(#{association}): ems=#{ems&.id}, user=#{user&.userid}"
+
+      # Return an empty relation early if no user is present
+      return ems.class.none if user.nil?
+
+      resources = ems.public_send(association)
+      return resources if user.super_admin_user?
+
+      Rbac.filtered(resources, :userid => user.userid)
     end
 
     def parse_error_message_from_fog_response(exception)

@@ -18,6 +18,8 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
   end
 
   def self.params_for_create(ems)
+    accessible_cloudTenants = accessible_resources_for_user(ems, :cloud_tenants)
+
     {
       :fields => [
         {
@@ -40,7 +42,7 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
           :isRequired   => true,
           :includeEmpty => true,
           :validate     => [{:type => 'required'}],
-          :options      => ems.cloud_tenants.map do |ct|
+          :options      => accessible_cloudTenants.map do |ct|
             {
               :label => ct.name,
               :value => ct.id.to_s,
@@ -79,7 +81,8 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
 
   def params_for_update
     current_size_gib = size_gib
-    
+    accessible_cloudTenants = accessible_resources_for_user(ext_management_system, :cloud_tenants)
+
     {
       :fields => [
         {
@@ -102,7 +105,7 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
           :isRequired => true,
           :validate   => [{:type => 'required'}],
           :isDisabled => !!id,
-          :options    => ext_management_system.cloud_tenants.map do |ct|
+          :options    => accessible_cloudTenants.map do |ct|
             {
               :label => ct.name,
               :value => ct.id.to_s,
@@ -147,7 +150,7 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
     }
   end
 
-  def self.raw_create_volume(ext_management_system, options)
+def self.raw_create_volume(ext_management_system, options)
     options = options.symbolize_keys
 
     cloud_tenant_id = options.delete(:cloud_tenant_id)
@@ -172,7 +175,7 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
 
   def raw_update_volume(options)
     options = options.symbolize_keys
-    
+
     options[:size] = options.delete(:size_gib).to_i if options[:size_gib]
 
     with_notification(:cloud_volume_update, :options => {:subject => self}) do
