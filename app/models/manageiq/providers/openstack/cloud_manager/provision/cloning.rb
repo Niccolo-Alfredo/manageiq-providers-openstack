@@ -57,25 +57,46 @@ module ManageIQ::Providers::Openstack::CloudManager::Provision::Cloning
 
   def start_clone(clone_options)
     connection_options = {:tenant_name => cloud_tenant.try(:name)}
+    
     if source.kind_of?(ManageIQ::Providers::Openstack::CloudManager::VolumeTemplate)
-      # remove the image_ref parameter from the options since it actually refers
-      # to a volume, and then overwrite the default root volume with the volume
-      # we are trying to boot the instance from
+      # Boot from existing bootable volume
       clone_options.delete(:image_ref)
-      clone_options[:block_device_mapping_v2][0][:source_type] = "volume"
-      clone_options[:block_device_mapping_v2][0].delete(:size)
-      clone_options[:block_device_mapping_v2][0][:delete_on_termination] = false
-      clone_options[:block_device_mapping_v2][0][:destination_type] = "volume"
-      # adjust the parameters to make booting from a volume work.
+      clone_options[:block_device_mapping_v2] = [{
+        :uuid => source.ems_ref,
+        :source_type => "volume",
+        :destination_type => "volume",
+        :boot_index => 0,
+        :delete_on_termination => false
+      }]
+      
+      # Append additional volumes if configured
+      if configure_volumes.present?
+        additional_volumes = configure_volumes.map do |vol|
+          vol.merge(:boot_index => vol[:boot_index] || -1)
+        end
+        clone_options[:block_device_mapping_v2].concat(additional_volumes)
+      end
+      
     elsif source.kind_of?(ManageIQ::Providers::Openstack::CloudManager::VolumeSnapshotTemplate)
-      # remove the image_ref parameter from the options since it actually refers
-      # to a volume, and then overwrite the default root volume with the volume
-      # we are trying to boot the instance from
+      # Boot from volume snapshot, creating a new volume from the snapshot
       clone_options.delete(:image_ref)
-      clone_options[:block_device_mapping_v2][0][:source_type] = "snapshot"
-      clone_options[:block_device_mapping_v2][0].delete(:size)
-      clone_options[:block_device_mapping_v2][0][:destination_type] = "volume"
+      clone_options[:block_device_mapping_v2] = [{
+        :uuid => source.ems_ref,
+        :source_type => "snapshot",
+        :destination_type => "volume",
+        :boot_index => 0,
+        :delete_on_termination => false
+      }]
+      
+      # Append additional volumes if configured
+      if configure_volumes.present?
+        additional_volumes = configure_volumes.map do |vol|
+          vol.merge(:boot_index => vol[:boot_index] || -1)
+        end
+        clone_options[:block_device_mapping_v2].concat(additional_volumes)
+      end
     end
+    
     source.with_provider_connection(connection_options) do |openstack|
       instance = openstack.servers.create(clone_options)
       return instance.id
