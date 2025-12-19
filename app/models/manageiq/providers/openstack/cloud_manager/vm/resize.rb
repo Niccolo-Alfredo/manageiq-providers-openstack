@@ -363,10 +363,26 @@ module ManageIQ::Providers::Openstack::CloudManager::Vm::Resize
   # ============================================================================
 
   def find_network_for_tenant(network_id)
-    # RBAC: Find network accessible to VM's tenant (private networks OR shared networks)
+    # RBAC Check 1: Tenant access (private + shared networks)
     networks = ext_management_system.cloud_networks.where(:ems_ref => network_id)
-    networks = networks.where("cloud_tenant_id = ? OR shared = ?", cloud_tenant.id, true) if cloud_tenant
-    networks.first
+    
+    if cloud_tenant
+      networks = networks.where("cloud_tenant_id = ? OR shared = ?", cloud_tenant.id, true)
+    end
+    
+    network = networks.first
+    return nil unless network
+    
+    # RBAC Check 2: Network not already attached to VM
+    attached_network_ids = network_ports.map do |port|
+      port.cloud_subnets.first&.cloud_network&.ems_ref
+    end.compact.uniq
+    
+    if attached_network_ids.include?(network.ems_ref)
+      raise "Network #{network.name} is already attached to this VM"
+    end
+    
+    network
   end
 
   def find_subnet_for_ip(subnets, ip_address)
