@@ -142,7 +142,7 @@
             true: 1
           :description: Choose Automatically
           :required: false
-          :display: :edit
+          :display: :hide
           :default: false
           :data_type: :boolean
         :placement_availability_zone:
