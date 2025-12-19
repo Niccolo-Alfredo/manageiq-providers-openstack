@@ -40,11 +40,21 @@ class ManageIQ::Providers::Openstack::Inventory::Parser::CloudManager < ManageIQ
     # Process volumes from collector (CREATE/UPDATE)
     collector.volume_templates.each do |vt|
       volume_id = vt.respond_to?(:id) ? vt.id : vt['id']
+      volume_name = vt.respond_to?(:name) ? vt.name : vt["name"]
+      volume_description = vt.respond_to?(:description) ? vt.description : vt.attributes['description']
       bootable_value = vt.respond_to?(:attributes) ? vt.attributes["bootable"] : vt["bootable"]
       
+      # Skip if not bootable
       next unless bootable_value.to_s == "true"
       
-      volume_name = vt.respond_to?(:name) ? vt.name : vt["name"]
+      # Only process volumes from backup restore
+      # OpenStack sets description to "auto-created_from_restore_from_backup" for restored volumes
+      unless volume_description == "auto-created_from_restore_from_backup"
+        $log.debug("Skipping volume #{volume_id} (name: #{volume_name}, description: '#{volume_description}') - not from backup restore") if $log
+        next
+      end
+      
+      $log.info("Adding VolumeTemplate for volume #{volume_id} from backup restore (name: #{volume_name})") if $log
       
       volume_template = persister.miq_templates.find_or_build(volume_id)
       volume_template.type = "#{persister.cloud_manager.class}::VolumeTemplate"
