@@ -19,24 +19,78 @@ class ManageIQ::Providers::Openstack::Inventory::Parser::CloudManager < ManageIQ
     volume_snapshot_templates
   end
 
+  # Parse bootable volumes as VolumeTemplates
   def volume_templates
+    # Handle DELETE scenario: targeted refresh with empty collector
+    if collector.respond_to?(:targets_by_association)
+      target_volume_ids = collector.targets_by_association(:volume_templates).map { |t| t.manager_ref[:ems_ref] }
+      
+      if target_volume_ids.any? && collector.volume_templates.empty?
+        target_volume_ids.each do |volume_id|
+          template = persister.manager.miq_templates.find_by(
+            :ems_ref => volume_id,
+            :type    => "#{persister.cloud_manager.class}::VolumeTemplate"
+          )
+          template.destroy if template
+        end
+        return
+      end
+    end
+    
+    # Process volumes from collector (CREATE/UPDATE)
     collector.volume_templates.each do |vt|
-      next if vt.attributes["bootable"].to_s != "true"
-      volume_template = persister.miq_templates.find_or_build(vt.id)
+      volume_id = vt.respond_to?(:id) ? vt.id : vt['id']
+      bootable_value = vt.respond_to?(:attributes) ? vt.attributes["bootable"] : vt["bootable"]
+      
+      next unless bootable_value.to_s == "true"
+      
+      volume_name = vt.respond_to?(:name) ? vt.name : vt["name"]
+      
+      volume_template = persister.miq_templates.find_or_build(volume_id)
       volume_template.type = "#{persister.cloud_manager.class}::VolumeTemplate"
-      volume_template.name = vt.name.blank? ? vt.id : vt.name
-      volume_template.cloud_tenant = persister.cloud_tenants.lazy_find(vt.tenant_id) if vt.tenant_id
+      volume_template.name = volume_name.blank? ? volume_id : volume_name
+      volume_template.cloud_tenant = persister.cloud_tenants.lazy_find(vt.tenant_id) if vt.respond_to?(:tenant_id) && vt.tenant_id
       volume_template.location = "N/A"
     end
   end
 
+  # Parse snapshots of bootable volumes as VolumeSnapshotTemplates
   def volume_snapshot_templates
-    collector.volume_snapshot_templates.each do |vt|
-      # next if vt["attributes"].["bootable"].to_s != "true"
-      volume_template = persister.miq_templates.find_or_build(vt["id"])
+    # Handle DELETE scenario: targeted refresh with empty collector
+    if collector.respond_to?(:targets_by_association)
+      target_snapshot_ids = collector.targets_by_association(:volume_snapshot_templates).map { |t| t.manager_ref[:ems_ref] }
+      
+      if target_snapshot_ids.any? && collector.volume_snapshot_templates.empty?
+        target_snapshot_ids.each do |snapshot_id|
+          template = persister.manager.miq_templates.find_by(
+            :ems_ref => snapshot_id,
+            :type    => "#{persister.cloud_manager.class}::VolumeSnapshotTemplate"
+          )
+          template.destroy if template
+        end
+        return
+      end
+    end
+    
+    # Process snapshots from collector (CREATE/UPDATE)
+    collector.volume_snapshot_templates.each do |snapshot|
+      snapshot_id = snapshot["id"]
+      volume_id = snapshot["volume_id"]
+      
+      next unless volume_id
+      
+      parent_volume = collector.volumes_by_id[volume_id]
+      next unless parent_volume
+      
+      bootable_value = parent_volume.respond_to?(:attributes) ? parent_volume.attributes["bootable"] : parent_volume["bootable"]
+      next unless bootable_value.to_s == "true"
+      
+      snapshot_name = snapshot['display_name'] || snapshot['name']
+      
+      volume_template = persister.miq_templates.find_or_build(snapshot_id)
       volume_template.type = "#{persister.cloud_manager.class}::VolumeSnapshotTemplate"
-      volume_template.name = (vt['display_name'] || vt['name']).blank? ? vt["id"] : (vt['display_name'] || vt['name'])
-      volume_template.cloud_tenant = persister.cloud_tenants.lazy_find(vt["os-extended-snapshot-attributes:project_id"])
+      volume_template.name = snapshot_name.blank? ? snapshot_id : snapshot_name
+      volume_template.cloud_tenant = persister.cloud_tenants.lazy_find(snapshot["os-extended-snapshot-attributes:project_id"])
       volume_template.location = "N/A"
     end
   end

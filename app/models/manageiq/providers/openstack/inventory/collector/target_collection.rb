@@ -255,6 +255,40 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
     @cloud_volume_backups = volume_service.handled_list(:list_backups_detailed, {:__request_body_index => "backups"}, cinder_admin?)
   end
 
+  def volume_templates
+    return [] unless volume_service
+    return [] if references(:volume_templates).blank?
+    return @volume_templates if @volume_templates.any?
+    @volume_templates = targets_by_association(:volume_templates).collect do |target|
+      scoped_get_volume(target.manager_ref[:ems_ref], target.options[:tenant_id])
+    end.compact
+  end
+
+  def volume_snapshot_templates
+    return [] unless volume_service
+    return [] if references(:volume_snapshot_templates).blank?
+    return @volume_snapshot_templates if @volume_snapshot_templates.any?
+    @volume_snapshot_templates = targets_by_association(:volume_snapshot_templates).collect do |target|
+      scoped_get_snapshot(target.manager_ref[:ems_ref], target.options[:tenant_id])
+    end.compact
+  end
+
+  def volumes_by_id
+    return {} unless volume_service
+    return @volumes_by_id if @volumes_by_id
+    
+    volume_ids_from_snapshots = targets_by_association(:volume_snapshot_templates).collect do |target|
+      snapshot = scoped_get_snapshot(target.manager_ref[:ems_ref], target.options[:tenant_id])
+      snapshot ? snapshot["volume_id"] : nil
+    end.compact.uniq
+    
+    parent_volumes = volume_ids_from_snapshots.collect do |volume_id|
+      safe_get { volume_service.volumes.get(volume_id) }
+    end.compact
+    
+    @volumes_by_id = parent_volumes.index_by(&:id)
+  end
+
   def scoped_get_volume(volume_id, tenant_id)
     tenant = memoized_get_tenant(tenant_id)
     safe_get { @os_handle.detect_volume_service(tenant.try(:name)).volumes.get(volume_id) }

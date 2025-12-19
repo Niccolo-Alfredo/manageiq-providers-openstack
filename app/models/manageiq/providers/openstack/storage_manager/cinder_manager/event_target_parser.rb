@@ -47,26 +47,36 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::EventTarget
     return unless @tenant_id
     
     volume_id = event_payload['volume_id']
+    return unless volume_id
     
-    if volume_id
-      add_target(target_collection, :cloud_volumes, volume_id, :tenant_id => @tenant_id)
-      
-      # Bootable volumes are also modeled as volume templates for VM provisioning
-      if volume_is_bootable?
-        add_target(target_collection, :volume_templates, volume_id, :tenant_id => @tenant_id)
-      end
-    end
+    is_start_event = ems_event.event_type.include?('.start')
+    
+    # Always add cloud_volumes target
+    add_target(target_collection, :cloud_volumes, volume_id, :tenant_id => @tenant_id)
+    
+    # Add volume_templates target for all events except .start
+    # This includes: create.end, delete.end, update.end, attach.end, detach.end, etc.
+    # Skip .start events as volume is not ready yet
+    add_target(target_collection, :volume_templates, volume_id, :tenant_id => @tenant_id) unless is_start_event
   end
 
   def collect_snapshot_references!(target_collection)
     return unless @tenant_id
     
     snapshot_id = event_payload['snapshot_id']
-    add_target(target_collection, :cloud_volume_snapshots, snapshot_id, :tenant_id => @tenant_id) if snapshot_id
-    
-    # Snapshots are always related to a parent volume
     volume_id = event_payload['volume_id']
+    
+    return unless snapshot_id
+    
+    # Always add cloud_volume_snapshots target
+    add_target(target_collection, :cloud_volume_snapshots, snapshot_id, :tenant_id => @tenant_id)
+    
+    # Add parent volume target if available
     add_target(target_collection, :cloud_volumes, volume_id, :tenant_id => @tenant_id) if volume_id
+    
+    # Add volume_snapshot_templates target for all snapshot events
+    # This includes: create.start, create.end, delete.start, delete.end, update.end
+    add_target(target_collection, :volume_snapshot_templates, snapshot_id, :tenant_id => @tenant_id) if volume_id
   end
 
   def collect_backup_references!(target_collection)
@@ -85,13 +95,6 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::EventTarget
     # Backups are always related to a parent volume
     volume_id = event_payload['volume_id']
     add_target(target_collection, :cloud_volumes, volume_id, :tenant_id => @tenant_id) if volume_id
-  end
-
-  def volume_is_bootable?
-    # Check if volume is bootable from various possible payload locations
-    event_payload['bootable'] == 'true' ||
-      event_payload.dig('volume_image_metadata', 'bootable') == 'true' ||
-      event_payload['volume_image_metadata'].present?
   end
 
   def parsed_targets(target_collection = {})
