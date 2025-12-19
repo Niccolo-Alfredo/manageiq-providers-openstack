@@ -22,6 +22,10 @@ module ManageIQ::Providers::Openstack::HelperMethods
     self.class.accessible_resources_for_user(ems, association, user)
   end
 
+  def accessible_networks_for_subnet_operations(ems, user = User.current_user)
+    self.class.accessible_networks_for_subnet_operations(ems, user)
+  end
+
   module ClassMethods
     def openstack_proxy
       ManageIQ::Providers::Openstack::CloudManager.http_proxy_uri&.to_s
@@ -38,6 +42,23 @@ module ManageIQ::Providers::Openstack::HelperMethods
       return resources if user.super_admin_user?
 
       Rbac.filtered(resources, :userid => user.userid)
+    end
+
+    # Returns networks accessible to the user for subnet creation/modification operations.
+    # Super admins can see all accessible networks (including shared and external).
+    # Regular users can only see private networks (not shared and not external).
+    def accessible_networks_for_subnet_operations(ems, user = User.current_user)
+      _log.debug "[RBAC] accessible_networks_for_subnet_operations: ems=#{ems&.id}, user=#{user&.userid}"
+
+      # Get base accessible networks using existing RBAC filtering
+      accessible_networks = accessible_resources_for_user(ems, :cloud_networks, user)
+
+      # Super admins can see all accessible networks
+      return accessible_networks if user&.super_admin_user?
+
+      # Regular users can only create/modify subnets on private networks
+      # Exclude shared and external networks
+      accessible_networks.where(shared: false, external_facing: false)
     end
 
     def parse_error_message_from_fog_response(exception)
