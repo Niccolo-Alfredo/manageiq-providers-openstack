@@ -153,31 +153,6 @@ module ManageIQ::Providers::Openstack::CloudManager::Vm::Resize
   end
 
   # ============================================================================
-  # SECURITY HELPERS
-  # ============================================================================
-
-  def find_network_for_tenant(network_id)
-    # Find network that is accessible to the VM's tenant
-    # This includes both private networks and shared networks
-    networks = ext_management_system.cloud_networks.where(:ems_ref => network_id)
-    networks = networks.where(cloud_tenant_id: cloud_tenant.id) if cloud_tenant
-    networks.first
-  end
-
-  def find_subnet_for_ip(subnets, ip_address)
-    require 'ipaddr'
-    
-    return nil if subnets.nil? || subnets.empty? || ip_address.blank?
-    
-    begin
-      ip = IPAddr.new(ip_address)
-      subnets.find { |subnet| IPAddr.new(subnet.cidr).include?(ip) }
-    rescue IPAddr::InvalidAddressError
-      nil
-    end
-  end
-  
-  # ============================================================================
   # UI FORM
   # ============================================================================
   
@@ -316,8 +291,19 @@ module ManageIQ::Providers::Openstack::CloudManager::Vm::Resize
 
   def networks_available_for_attach
     available = ext_management_system.cloud_networks
-    # RBAC: Filter by VM's tenant (includes private + shared networks accessible to tenant)
-    available = available.where(cloud_tenant_id: cloud_tenant.id) if cloud_tenant
+    
+    # RBAC: Include networks owned by VM's tenant AND shared networks
+    if cloud_tenant
+      available = available.where("cloud_tenant_id = ? OR shared = ?", cloud_tenant.id, true)
+    end
+    
+    # Get network IDs already attached to this VM (exclude these)
+    attached_network_ids = network_ports.map do |port|
+      port.cloud_subnets.first&.cloud_network&.ems_ref
+    end.compact.uniq
+    
+    # Filter out already attached networks
+    available = available.where.not(ems_ref: attached_network_ids) if attached_network_ids.any?
     
     # Only show networks with allocation pools (required for auto-assign)
     available.select do |net|
@@ -375,6 +361,26 @@ module ManageIQ::Providers::Openstack::CloudManager::Vm::Resize
   # ============================================================================
   # HELPERS
   # ============================================================================
+
+  def find_network_for_tenant(network_id)
+    # RBAC: Find network accessible to VM's tenant (private networks OR shared networks)
+    networks = ext_management_system.cloud_networks.where(:ems_ref => network_id)
+    networks = networks.where("cloud_tenant_id = ? OR shared = ?", cloud_tenant.id, true) if cloud_tenant
+    networks.first
+  end
+
+  def find_subnet_for_ip(subnets, ip_address)
+    require 'ipaddr'
+    
+    return nil if subnets.nil? || subnets.empty? || ip_address.blank?
+    
+    begin
+      ip = IPAddr.new(ip_address)
+      subnets.find { |subnet| IPAddr.new(subnet.cidr).include?(ip) }
+    rescue IPAddr::InvalidAddressError
+      nil
+    end
+  end
 
   def network_connection_options
     {:service => 'Network', :tenant_name => cloud_tenant.name}
