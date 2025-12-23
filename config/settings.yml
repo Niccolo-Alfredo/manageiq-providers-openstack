@@ -4,7 +4,7 @@
     :is_admin: false
     :heat:
       :is_global_admin: false
-    :parallel_thread_limit: 0
+    :parallel_thread_limit: 10
     :allow_targeted_refresh: true
   :openstack_network:
     :is_admin: false
