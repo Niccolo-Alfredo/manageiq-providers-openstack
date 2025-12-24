@@ -219,15 +219,6 @@ class ManageIQ::Providers::Openstack::NetworkManager::CloudNetwork < ::CloudNetw
 
     fields << {
       :component => 'switch',
-      :id        => 'cloud_network_external_facing',
-      :name      => 'external_facing',
-      :label     => _('External Router'),
-      :onText    => _('Yes'),
-      :offText   => _('No'),
-    }
-
-    fields << {
-      :component => 'switch',
       :id        => 'cloud_network_enabled',
       :name      => 'enabled',
       :label     => _('Adminstrative State'),
@@ -451,15 +442,6 @@ class ManageIQ::Providers::Openstack::NetworkManager::CloudNetwork < ::CloudNetw
 
     fields << {
       :component => 'switch',
-      :id        => 'cloud_network_external_facing',
-      :name      => 'external_facing',
-      :label     => _('External Router'),
-      :onText    => _('Yes'),
-      :offText   => _('No'),
-    }
-
-    fields << {
-      :component => 'switch',
       :id        => 'cloud_network_enabled',
       :name      => 'enabled',
       :label     => _('Adminstrative State'),
@@ -493,9 +475,8 @@ class ManageIQ::Providers::Openstack::NetworkManager::CloudNetwork < ::CloudNetw
   def self.raw_create_cloud_network(ext_management_system, options)
     cloud_tenant = options.delete(:cloud_tenant)
     network = nil
-    raw_options = remapping(options)
     ext_management_system.with_provider_connection(connection_options(cloud_tenant)) do |service|
-      network = service.networks.new(raw_options)
+      network = service.networks.new(options)
       network.save
     end
     {:ems_ref => network.id, :name => options[:name]}

@@ -20,12 +20,7 @@ module ManageIQ::Providers::Openstack::CloudManager::Vm::Resize
     detach_port_interface(options["detach_port_id"]) if options["detach_port_id"].present?
 
     # Attach network if requested
-    attach_mode = options["attach_mode"]
-    if attach_mode == "by_network" && options["attach_network_id"].present?
-      attach_by_network(options["attach_network_id"])
-    elsif attach_mode == "by_port" && options["port_network_id"].present?
-      attach_by_port(options["port_network_id"], options["port_name"], options["port_fixed_ip"])
-    end
+    attach_by_network(options["attach_network_id"]) if options["attach_network_id"].present?
 
     # Resize flavor if requested
     if options["flavor"].present?
@@ -159,32 +154,6 @@ module ManageIQ::Providers::Openstack::CloudManager::Vm::Resize
   def params_for_resize
     {
       :fields => [
-        # Instance Type Section
-        {
-          :component => 'plain-text',
-          :name      => 'instance_type_title',
-          :label     => _('Instance Type'),
-          :style     => {:fontWeight => 'bold', :fontSize => '16px', :marginBottom => '8px'}
-        },
-        {
-          :component  => 'text-field',
-          :name       => 'current_flavor',
-          :id         => 'current_flavor',
-          :label      => _('Current Flavor'),
-          :isDisabled => true,
-          :value      => flavor&.name_with_details || _('N/A')
-        },
-        {
-          :component    => 'select',
-          :name         => 'flavor',
-          :id           => 'flavor',
-          :label        => _('New Flavor'),
-          :isRequired   => false,
-          :includeEmpty => true,
-          :options      => resize_form_options,
-          :helperText   => _('Select a new flavor to resize the instance')
-        },
-        
         # Network Interfaces Section
         {
           :component => 'plain-text',
@@ -193,76 +162,21 @@ module ManageIQ::Providers::Openstack::CloudManager::Vm::Resize
           :style     => {:fontWeight => 'bold', :fontSize => '16px', :marginTop => '20px', :marginBottom => '2px'}
         },
         
-        # Attach Interface Subsection
+        # Attach Interface Section
         {
           :component => 'sub-form',
           :name      => 'attach_subsection',
           :title     => _('Attach Interface'),
           :fields    => [
             {
-              :component => 'radio',
-              :name      => 'attach_mode',
-              :id        => 'attach_mode',
-              :label     => _('Mode'),
-              :options   => [
-                {:label => _('By Network (auto-assign IP)'), :value => 'by_network'},
-                {:label => _('By Port (specify IP)'), :value => 'by_port'}
-              ]
-            },
-            
-            # By Network Fields
-            {
               :component    => 'select',
               :name         => 'attach_network_id',
               :id           => 'attach_network_id',
               :label        => _('Network'),
-              :isRequired   => true,
+              :isRequired   => false,
               :includeEmpty => true,
               :options      => networks_available_for_attach,
-              :helperText   => _('Auto-assign an IP from available pools'),
-              :condition    => {
-                :when => 'attach_mode',
-                :is   => 'by_network'
-              }
-            },
-            
-            # By Port Fields
-            {
-              :component    => 'select',
-              :name         => 'port_network_id',
-              :id           => 'port_network_id',
-              :label        => _('Network'),
-              :isRequired   => true,
-              :includeEmpty => true,
-              :options      => networks_available_for_attach,
-              :condition    => {
-                :when => 'attach_mode',
-                :is   => 'by_port'
-              }
-            },
-            {
-              :component  => 'text-field',
-              :name       => 'port_name',
-              :id         => 'port_name',
-              :label      => _('Port Name'),
-              :isRequired => true,
-              :helperText => _('e.g., vm-port-1'),
-              :condition  => {
-                :when => 'attach_mode',
-                :is   => 'by_port'
-              }
-            },
-            {
-              :component  => 'text-field',
-              :name       => 'port_fixed_ip',
-              :id         => 'port_fixed_ip',
-              :label      => _('Fixed IP'),
-              :isRequired => true,
-              :helperText => _('IP within subnet range'),
-              :condition  => {
-                :when => 'attach_mode',
-                :is   => 'by_port'
-              }
+              :helperText   => _('Auto-assign an IP from available pools')
             }
           ]
         },
