@@ -129,7 +129,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::CloudSubnet < ::CloudSubne
 
   def params_for_update
     accessible_cloudTenants = accessible_resources_for_user(ext_management_system, :cloud_tenants)
-    accessible_cloudNetworks = accessible_networks_for_subnet_operations(ems)
+    accessible_cloudNetworks = accessible_networks_for_subnet_operations(ext_management_system)
 
     {
       :fields => [
