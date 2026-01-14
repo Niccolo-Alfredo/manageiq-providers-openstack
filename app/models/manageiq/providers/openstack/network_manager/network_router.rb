@@ -258,11 +258,13 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
     router = nil
 
     ext_management_system.with_provider_connection(connection_options(cloud_tenant)) do |service|
-      router = service.create_router(router_name, options).body
+      # Only pass OpenStack Neutron-compatible parameters
+      payload = options.slice(:admin_state_up, :external_gateway_info)
+      router = service.create_router(router_name, payload).body
     end
     {:ems_ref => router['id'], :name => router_name}
   rescue => e
-    _log.error "router=[#{options[:name]}], error: #{e}"
+    _log.error "router=[#{router_name}], error: #{e}"
     parsed_error = parse_error_message_from_neutron_response(e)
     error_message = case parsed_error
                     when /Quota exceeded for resources/
@@ -290,7 +292,19 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
   def self.options_to_refs!(cloud_tenant, options)
     if (cloud_network_id = options[:cloud_network_id]).present?
       gateway_options = {}
-      network = cloud_tenant.cloud_networks.find(cloud_network_id)
+      
+      # Primary: look for VLAN networks (physical external/public networks in our infrastructure)
+      begin
+        network = CloudNetwork.find_by!(
+          :id                    => cloud_network_id,
+          :provider_network_type => "vlan"
+        )
+      rescue ActiveRecord::RecordNotFound
+        # Fallback: tenant-scoped private networks
+        _log.debug("VLAN network #{cloud_network_id} not found, searching in tenant ID: #{cloud_tenant.id} private networks")
+        network = cloud_tenant.cloud_networks.find(cloud_network_id)
+      end
+      
       gateway_options[:network_id] = network.ems_ref
       if (cloud_subnet_ids = options.delete(:cloud_subnet_id)).present?
         gateway_options[:external_fixed_ips] =
@@ -299,7 +313,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
             {:subnet_id => subnet.ems_ref}
           end
       end
-      gateway_options[:enable_snat] = options.fetch_path(:external_gateway_info, :enable_snat)
+      gateway_options[:enable_snat] = options[:enable_snat]
       gateway_options[:enable_snat] = false if gateway_options[:enable_snat].nil?
       options[:external_gateway_info] = gateway_options
     else
