@@ -313,8 +313,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
             {:subnet_id => subnet.ems_ref}
           end
       end
-      gateway_options[:enable_snat] = options[:enable_snat]
-      gateway_options[:enable_snat] = false if gateway_options[:enable_snat].nil?
+
       options[:external_gateway_info] = gateway_options
     else
       options.delete(:external_gateway_info) # only has the enable_snat flag, but no cloud network
@@ -342,7 +341,8 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
   def raw_update_network_router(options)
     self.class.options_to_refs!(cloud_tenant, options)
     ext_management_system.with_provider_connection(connection_options(cloud_tenant)) do |service|
-      service.update_router(ems_ref, options)
+      payload = options.slice(:admin_state_up, :external_gateway_info)
+      service.update_router(ems_ref, payload)
     end
   rescue => e
     _log.error "router=[#{name}], error: #{e}"
