@@ -20,21 +20,23 @@ module ManageIQ::Providers::Openstack::CloudManager::Vm::AssociateIp
     end
   end
 
-  def raw_associate_floating_ip(floating_ip)
+  def raw_associate_floating_ip(floating_ip_id)
+    floating_ip_record = cloud_tenant.floating_ips.find(floating_ip_id)
     ext_management_system.with_provider_connection(compute_connection_options) do |connection|
-      connection.associate_address(ems_ref, floating_ip)
+      connection.associate_address(ems_ref, floating_ip_record.address)
     end
   rescue => err
-    _log.error "vm=[#{name}], floating_ip=[#{floating_ip}], error: #{err}"
+    _log.error "vm=[#{name}], floating_ip=[#{floating_ip_id}], error: #{err}"
     raise MiqException::MiqOpenstackApiRequestError, parse_error_message_from_fog_response(err), err.backtrace
   end
 
-  def raw_disassociate_floating_ip(floating_ip)
+  def raw_disassociate_floating_ip(floating_ip_id)
+    floating_ip_record = cloud_tenant.floating_ips.find(floating_ip_id)
     ext_management_system.with_provider_connection(compute_connection_options) do |connection|
-      connection.disassociate_address(ems_ref, floating_ip)
+      connection.disassociate_address(ems_ref, floating_ip_record.address)
     end
   rescue => err
-    _log.error "vm=[#{name}], floating_ip=[#{floating_ip}], error: #{err}"
+    _log.error "vm=[#{name}], floating_ip=[#{floating_ip_id}], error: #{err}"
     raise MiqException::MiqOpenstackApiRequestError, parse_error_message_from_fog_response(err), err.backtrace
   end
 

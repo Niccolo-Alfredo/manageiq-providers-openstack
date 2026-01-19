@@ -24,6 +24,8 @@ class ManageIQ::Providers::Openstack::NetworkManager::EventTargetParser
                     :floating_ips
                   when "router"
                     :network_routers
+                  when "router.interface"
+                    :router_interfaces
                   when "port"
                     :network_ports
                   when "network"
@@ -42,10 +44,26 @@ class ManageIQ::Providers::Openstack::NetworkManager::EventTargetParser
       add_target(target_collection, :security_groups, nil)
     elsif target_type == :firewall_rules
       add_target(target_collection, :firewall_rules, nil)
+    elsif target_type == :router_interfaces
+      collect_router_interface_targets!(target_collection)
     end
 
     $log.debug("(Target Refresh) - MIQ(#{self.class.name}) Collected #{target_collection.targets.count} target(s) for #{ems_event.event_type}") if $log
     target_collection.targets
+  end
+
+  def collect_router_interface_targets!(target_collection)
+    router_interface = event_payload["router_interface"] || {}
+    
+    # Router, port, subnet e network IDs da router_interface
+    [
+      [:network_routers, router_interface["id"]],
+      [:network_ports, router_interface["port_id"]],
+      [:cloud_subnets, router_interface["subnet_id"]],
+      [:cloud_networks, router_interface["network_id"]]
+    ].each do |association, ref|
+      add_target(target_collection, association, ref) if ref
+    end
   end
 
   def collect_identity_tenant_references!(target_collection)
@@ -53,7 +71,8 @@ class ManageIQ::Providers::Openstack::NetworkManager::EventTargetParser
                 event_payload['project_id'] || 
                 event_payload.dig(resource_type, 'tenant_id') ||
                 event_payload.dig(resource_type, 'project_id') ||
-                event_payload.dig('initiator', 'project_id')
+                event_payload.dig('initiator', 'project_id') ||
+                event_payload.dig('router_interface', 'tenant_id')
     
     add_target(target_collection, :cloud_tenants, tenant_id) if tenant_id
   end
@@ -71,7 +90,15 @@ class ManageIQ::Providers::Openstack::NetworkManager::EventTargetParser
   end
 
   def resource_type
-    @resource_type ||= ems_event.event_type.split(".").first
+    @resource_type ||= begin
+      type = ems_event.event_type
+      # If it starts with router.interface, use that; otherwise, take the first part
+      if type.start_with?("router.interface.")
+        "router.interface"
+      else
+        type.split(".").first
+      end
+    end
   end
 
   def resource_id
