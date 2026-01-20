@@ -9,7 +9,7 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
     with_notification(:cloud_volume_backup_restore,
                       :options => {
                         :subject     => self,
-                        :volume_name => cloud_volume.name
+                        :volume_name => cloud_volume&.name || "deleted_volume"
                       }) do
       with_provider_object do |backup|
         backup.restore(volumeid, name)
@@ -17,7 +17,6 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
     end
   rescue => e
     parsed_error = parse_error_message_from_fog_response(e)
-
     _log.error("backup=[#{name}], error: #{parsed_error}")
     raise MiqException::MiqOpenstackApiRequestError, parsed_error, e.backtrace
   end
@@ -26,7 +25,7 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
     with_notification(:cloud_volume_backup_delete,
                       :options => {
                         :subject     => self,
-                        :volume_name => cloud_volume.name
+                        :volume_name => cloud_volume&.name || "deleted_volume"
                       }) do
       with_provider_object do |backup|
         backup&.destroy
@@ -34,7 +33,6 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
     end
   rescue => e
     parsed_error = parse_error_message_from_fog_response(e)
-
     _log.error("volume backup=[#{name}], error: #{parsed_error}")
     raise MiqException::MiqOpenstackApiRequestError, parsed_error, e.backtrace
   end

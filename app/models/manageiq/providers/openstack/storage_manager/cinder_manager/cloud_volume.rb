@@ -150,7 +150,7 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::CloudVolume
     }
   end
 
-def self.raw_create_volume(ext_management_system, options)
+  def self.raw_create_volume(ext_management_system, options)
     options = options.symbolize_keys
 
     cloud_tenant_id = options.delete(:cloud_tenant_id)
@@ -193,6 +193,11 @@ def self.raw_create_volume(ext_management_system, options)
   end
 
   def raw_delete_volume
+    # Preserva il tenant nei backup prima di cancellare
+    if cloud_tenant_id && cloud_volume_backups.exists?
+      cloud_volume_backups.where(cloud_tenant_id: nil).update_all(cloud_tenant_id: cloud_tenant_id)
+    end
+
     with_notification(:cloud_volume_delete,
                       :options => {
                         :subject => self,
