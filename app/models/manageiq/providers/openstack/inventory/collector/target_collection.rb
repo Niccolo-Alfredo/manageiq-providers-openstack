@@ -158,6 +158,37 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
     @tenant_memo[tenant_id]
   end
 
+  def quotas
+    return [] if references(:cloud_tenants).blank?
+
+    handle_tenants = @os_handle.tenants
+    results = []
+
+    references(:cloud_tenants).each do |tenant_id|
+      tenant = handle_tenants.detect { |t| (t.respond_to?(:id) ? t.id : t['id']) == tenant_id }
+      unless tenant
+        $log.warn("Tenant not found for quota refresh: #{tenant_id}")
+        next
+      end
+
+      tenant_id_val = tenant.respond_to?(:id) ? tenant.id : tenant['id']
+      tenant_name = tenant.respond_to?(:name) ? tenant.name : tenant['name']
+
+      %w[Compute Volume Network].each do |service_name|
+        svc = @os_handle.detect_service(service_name, tenant_name)
+        unless svc
+          $log.warn("Service #{service_name} not available for tenant #{tenant_id_val} during quota refresh")
+          next
+        end
+
+        q = fetch_quota_for_service(svc, service_name, tenant_id_val)
+        results << q if q.is_a?(Hash)
+      end
+    end
+
+    results
+  end
+
   def key_pairs
     # keypair notifications from panko don't include ids, so
     # we will just refresh all the keypairs if we get an event.
@@ -305,6 +336,28 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
   end
 
   private
+
+  def fetch_quota_for_service(svc, service_name, tenant_id_val)
+    body = svc.get_quota(tenant_id_val).body
+    q = (service_name == "Network") ? body['quota'] : body['quota_set']
+    unless q.is_a?(Hash)
+      $log.warn("Quota response for tenant #{tenant_id_val} #{service_name} is not a hash, skipping")
+      return nil
+    end
+    q.merge('tenant_id' => tenant_id_val, 'service_name' => service_name)
+  rescue Excon::Errors::NotFound,
+         Excon::Error::Timeout,
+         Excon::Error::Socket => err
+    $log.warn("Failed to fetch quota for tenant #{tenant_id_val} #{service_name}: #{err.message}")
+    nil
+  rescue Fog::OpenStack::Compute::NotFound,
+         Fog::OpenStack::Volume::NotFound,
+         Fog::OpenStack::Network::NotFound,
+         Fog::Errors::TimeoutError,
+         Fog::Errors::Error => err
+    $log.warn("Failed to fetch quota for tenant #{tenant_id_val} #{service_name}: #{err.message}")
+    nil
+  end
 
   def parse_targets!
     target.targets.each do |t|
