@@ -26,8 +26,9 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::CloudC
     end
     add_cloud_collection(:networks)
 
+    add_cloud_collection(:cloud_resource_quotas)
+
     unless targeted?
-      add_cloud_collection(:cloud_resource_quotas)
       add_cloud_collection(:cloud_services)
       add_cloud_collection(:host_aggregates)
     end
