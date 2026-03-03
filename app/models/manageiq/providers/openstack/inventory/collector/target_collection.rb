@@ -180,12 +180,12 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
           $log.warn("Service #{service_name} not available for tenant #{tenant_id_val} during quota refresh")
           next
         end
-
+        $log.info("QUOTAS:: fetching quota for service #{service_name} for tenant #{tenant_id_val}")
         q = fetch_quota_for_service(svc, service_name, tenant_id_val)
         results << q if q.is_a?(Hash)
       end
     end
-
+    $log.info("QUOTAS:: Results: #{results}")
     results
   end
 
