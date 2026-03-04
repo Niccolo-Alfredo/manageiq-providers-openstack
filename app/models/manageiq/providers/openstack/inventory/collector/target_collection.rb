@@ -159,7 +159,9 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
   end
 
   def quotas
+    $log.info("QUOTAS:: collector called (TargetCollection), cloud_tenant refs: #{references(:cloud_tenants).inspect}")
     return [] if references(:cloud_tenants).blank?
+    $log.info("QUOTAS:: fetching quotas for tenants: #{references(:cloud_tenants)}")
 
     handle_tenants = @os_handle.tenants
     results = []
@@ -173,7 +175,7 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
 
       tenant_id_val = tenant.respond_to?(:id) ? tenant.id : tenant['id']
       tenant_name = tenant.respond_to?(:name) ? tenant.name : tenant['name']
-
+      $log.info("QUOTAS:: tenant: #{tenant_id_val} #{tenant_name}")
       %w[Compute Volume Network].each do |service_name|
         svc = @os_handle.detect_service(service_name, tenant_name)
         unless svc
