@@ -26,7 +26,20 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::CloudC
     end
     add_cloud_collection(:networks)
 
-    add_cloud_collection(:cloud_resource_quotas)
+    add_cloud_collection(:cloud_resource_quotas) do |builder|
+      builder.add_properties(:parent_inventory_collections => %i[cloud_tenants])
+      builder.add_targeted_arel(
+        lambda do |inventory_collection|
+          tenant_refs = inventory_collection.parent_inventory_collections
+                                            .collect(&:manager_uuids)
+                                            .map(&:to_a)
+                                            .flatten
+          inventory_collection.parent.cloud_resource_quotas
+                              .joins(:cloud_tenant)
+                              .where('cloud_tenants.ems_ref' => tenant_refs)
+        end
+      )
+    end
 
     unless targeted?
       add_cloud_collection(:cloud_services)
