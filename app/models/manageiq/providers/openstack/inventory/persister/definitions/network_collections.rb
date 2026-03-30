@@ -13,13 +13,49 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
 
     add_network_collection(:firewall_rules) do |builder|
       builder.add_properties(:manager_ref => %i[ems_ref])
+      builder.add_properties(:parent_inventory_collections => %i[security_groups])
+      builder.add_targeted_arel(
+        lambda do |inventory_collection|
+          sg_refs = inventory_collection.parent_inventory_collections
+                                        .collect(&:manager_uuids)
+                                        .map(&:to_a)
+                                        .flatten
+          inventory_collection.parent.firewall_rules
+                              .joins(:resource)
+                              .where('security_groups.ems_ref' => sg_refs)
+        end
+      )
     end
 
     add_network_collection(:network_ports) do |builder|
       builder.add_properties(:delete_method => :disconnect_port)
+      builder.add_properties(:parent_inventory_collections => %i[cloud_tenants])
+      builder.add_targeted_arel(
+        lambda do |inventory_collection|
+          tenant_refs = inventory_collection.parent_inventory_collections
+                                            .collect(&:manager_uuids)
+                                            .map(&:to_a)
+                                            .flatten
+          inventory_collection.parent.network_ports
+                              .joins(:cloud_tenant)
+                              .where('cloud_tenants.ems_ref' => tenant_refs)
+        end
+      )
     end
 
     add_network_collection(:security_groups) do |builder|
+      builder.add_properties(:parent_inventory_collections => %i[cloud_tenants])
+      builder.add_targeted_arel(
+        lambda do |inventory_collection|
+          tenant_refs = inventory_collection.parent_inventory_collections
+                                            .collect(&:manager_uuids)
+                                            .map(&:to_a)
+                                            .flatten
+          inventory_collection.parent.security_groups
+                              .joins(:cloud_tenant)
+                              .where('cloud_tenants.ems_ref' => tenant_refs)
+        end
+      )
       # targeted refresh workaround-- always refresh the whole security group collection
       # regardless of whether this is a TargetCollection or not
       # because OpenStack doesn't give us UUIDs of new or changed security groups,
