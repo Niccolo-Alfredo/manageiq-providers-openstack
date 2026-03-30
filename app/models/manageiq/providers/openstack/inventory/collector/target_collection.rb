@@ -49,13 +49,28 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
 
   def network_ports
     return [] unless network_service
-    return [] if references(:network_ports).blank?
-    return @network_ports if @network_ports.any?
-    @network_ports = (references(:network_ports).collect do |port_id|
-      safe_get { network_service.ports.get(port_id) }
-    end + references(:network_routers).collect do |router_id|
-      network_service.handled_list(:ports, :device_id => router_id)
-    end.flatten).compact
+    return @network_ports if @network_ports&.any?
+
+    @network_ports = []
+
+    # Existing: fetch by specific port refs and router refs
+    if references(:network_ports).present?
+      @network_ports += references(:network_ports).collect do |port_id|
+        safe_get { network_service.ports.get(port_id) }
+      end
+      @network_ports += references(:network_routers).collect do |router_id|
+        network_service.handled_list(:ports, :device_id => router_id)
+      end.flatten
+    end
+
+    # New: fetch all ports for targeted tenants
+    if references(:cloud_tenants).present?
+      references(:cloud_tenants).each do |tenant_id|
+        @network_ports += network_service.handled_list(:ports, :tenant_id => tenant_id)
+      end
+    end
+
+    @network_ports = @network_ports.compact.uniq { |p| p.respond_to?(:id) ? p.id : p['id'] }
   end
 
   def network_routers
@@ -69,17 +84,36 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
 
   def security_groups
     return [] unless network_service
-    return [] if references(:security_groups).blank?
-    return @security_groups if @security_groups.any?
-    @security_groups = network_service.handled_list(:security_groups, {}, openstack_network_admin?)
+    return @security_groups if @security_groups&.any?
+
+    @security_groups = []
+
+    # Existing: fetch all SGs when any SG event arrives
+    if references(:security_groups).present?
+      @security_groups = network_service.handled_list(:security_groups, {}, openstack_network_admin?)
+    end
+
+    # New: fetch SGs for targeted tenants
+    if references(:cloud_tenants).present?
+      references(:cloud_tenants).each do |tenant_id|
+        @security_groups += network_service.handled_list(:security_groups, :tenant_id => tenant_id)
+      end
+    end
+
+    @security_groups = @security_groups.compact.uniq { |sg| sg.respond_to?(:id) ? sg.id : sg['id'] }
   end
 
   def firewall_rules
     return [] unless network_service
-    return [] if references(:firewall_rules).blank?
-    return @firewall_rules if @firewall_rules.any?
+    return @firewall_rules if @firewall_rules&.any?
 
-    @firewall_rules = network_service.handled_list(:security_group_rules, {}, openstack_network_admin?)
+    if references(:firewall_rules).present? || references(:security_groups).present? || references(:cloud_tenants).present?
+      @firewall_rules = network_service.handled_list(:security_group_rules, {}, openstack_network_admin?)
+    else
+      @firewall_rules = []
+    end
+
+    @firewall_rules
   end
 
   def floating_ips
