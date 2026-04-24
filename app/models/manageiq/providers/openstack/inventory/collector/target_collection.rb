@@ -59,14 +59,14 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
         safe_get { network_service.ports.get(port_id) }
       end
       @network_ports += references(:network_routers).collect do |router_id|
-        network_service.handled_list(:ports, :device_id => router_id)
+        network_service.handled_list(:ports, {:device_id => router_id}, openstack_network_admin?)
       end.flatten
     end
 
     # New: fetch all ports for targeted tenants
     if references(:cloud_tenants).present?
       references(:cloud_tenants).each do |tenant_id|
-        @network_ports += network_service.handled_list(:ports, :tenant_id => tenant_id)
+        @network_ports += network_service.handled_list(:ports, {:tenant_id => tenant_id}, openstack_network_admin?)
       end
     end
 
@@ -96,7 +96,7 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
     # New: fetch SGs for targeted tenants
     if references(:cloud_tenants).present?
       references(:cloud_tenants).each do |tenant_id|
-        @security_groups += network_service.handled_list(:security_groups, :tenant_id => tenant_id)
+        @security_groups += network_service.handled_list(:security_groups, {:tenant_id => tenant_id}, openstack_network_admin?)
       end
     end
 
