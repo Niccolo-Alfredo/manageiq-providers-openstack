@@ -43,8 +43,9 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
 
   def cloud_subnets
     return [] unless network_service
+    return [] if references(:cloud_subnets).blank? && references(:cloud_networks).blank? && references(:network_ports).blank?
     return @cloud_subnets if @cloud_subnets.any?
-    @cloud_subnets = network_service.handled_list(:subnets, {}, openstack_network_admin?)
+    @cloud_subnets = network_service.handled_list(:subnets, {}, true)
   end
 
   def network_ports
@@ -59,14 +60,14 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
         safe_get { network_service.ports.get(port_id) }
       end
       @network_ports += references(:network_routers).collect do |router_id|
-        network_service.pagination_handle(:ports, {:device_id => router_id}).list
+        network_service.handled_list(:ports, {:device_id => router_id}, true)
       end.flatten
     end
 
-    # New: fetch all ports for targeted tenants (bypass multi-tenancy loop, query directly with tenant_id filter)
+    # New: fetch all ports for targeted tenants
     if references(:cloud_tenants).present?
       references(:cloud_tenants).each do |tenant_id|
-        @network_ports += network_service.pagination_handle(:ports, {:tenant_id => tenant_id}).list
+        @network_ports += network_service.handled_list(:ports, {:tenant_id => tenant_id}, true)
       end
     end
 
@@ -93,10 +94,10 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
       @security_groups = network_service.handled_list(:security_groups, {}, openstack_network_admin?)
     end
 
-    # New: fetch SGs for targeted tenants (bypass multi-tenancy loop, query directly with tenant_id filter)
+    # New: fetch SGs for targeted tenants
     if references(:cloud_tenants).present?
       references(:cloud_tenants).each do |tenant_id|
-        @security_groups += network_service.pagination_handle(:security_groups, {:tenant_id => tenant_id}).list
+        @security_groups += network_service.handled_list(:security_groups, {:tenant_id => tenant_id}, true)
       end
     end
 
@@ -108,7 +109,7 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
     return @firewall_rules if @firewall_rules&.any?
 
     if references(:firewall_rules).present? || references(:security_groups).present? || references(:cloud_tenants).present?
-      @firewall_rules = network_service.handled_list(:security_group_rules, {}, openstack_network_admin?)
+      @firewall_rules = network_service.handled_list(:security_group_rules, {}, true)
     else
       @firewall_rules = []
     end
@@ -234,7 +235,8 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
   end
 
   def server_groups
-    @server_groups ||= compute_service.handled_list(:server_groups, {}, openstack_admin?)
+    return [] if references(:vms).blank?
+    @server_groups ||= compute_service.handled_list(:server_groups, {}, true)
   end
 
   def server_group_by_vm_id
