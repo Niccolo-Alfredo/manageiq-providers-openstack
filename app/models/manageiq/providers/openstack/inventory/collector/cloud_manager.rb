@@ -73,7 +73,6 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::CloudManager < Manag
     quotas.concat(safe_list { volume_service.quotas_for_accessible_tenants }) if volume_service
     # TODO(lsmola) can this somehow be moved under NetworkManager
     quotas.concat(safe_list { network_service.quotas_for_accessible_tenants }) if network_service
-    $log.info("QUOTAS:: full refresh: fetched #{quotas.size} quota entries for tenants: #{quotas.map { |q| q['tenant_id'] }.uniq.inspect}")
     quotas
   end
 
