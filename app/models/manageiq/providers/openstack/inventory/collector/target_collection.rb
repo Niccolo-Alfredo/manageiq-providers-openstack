@@ -43,19 +43,35 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
 
   def cloud_subnets
     return [] unless network_service
+    return [] if references(:cloud_subnets).blank? && references(:cloud_networks).blank? && references(:network_ports).blank?
     return @cloud_subnets if @cloud_subnets.any?
-    @cloud_subnets = network_service.handled_list(:subnets, {}, openstack_network_admin?)
+    @cloud_subnets = network_service.handled_list(:subnets, {}, true)
   end
 
   def network_ports
     return [] unless network_service
-    return [] if references(:network_ports).blank?
-    return @network_ports if @network_ports.any?
-    @network_ports = (references(:network_ports).collect do |port_id|
-      safe_get { network_service.ports.get(port_id) }
-    end + references(:network_routers).collect do |router_id|
-      network_service.handled_list(:ports, :device_id => router_id)
-    end.flatten).compact
+    return @network_ports if @network_ports&.any?
+
+    @network_ports = []
+
+    # Existing: fetch by specific port refs and router refs
+    if references(:network_ports).present?
+      @network_ports += references(:network_ports).collect do |port_id|
+        safe_get { network_service.ports.get(port_id) }
+      end
+      @network_ports += references(:network_routers).collect do |router_id|
+        network_service.handled_list(:ports, {:device_id => router_id}, true)
+      end.flatten
+    end
+
+    # New: fetch all ports for targeted tenants
+    if references(:cloud_tenants).present?
+      references(:cloud_tenants).each do |tenant_id|
+        @network_ports += network_service.handled_list(:ports, {:tenant_id => tenant_id}, true)
+      end
+    end
+
+    @network_ports = @network_ports.compact.uniq { |p| p.respond_to?(:id) ? p.id : p['id'] }
   end
 
   def network_routers
@@ -69,17 +85,36 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
 
   def security_groups
     return [] unless network_service
-    return [] if references(:security_groups).blank?
-    return @security_groups if @security_groups.any?
-    @security_groups = network_service.handled_list(:security_groups, {}, openstack_network_admin?)
+    return @security_groups if @security_groups&.any?
+
+    @security_groups = []
+
+    # Existing: fetch all SGs when any SG event arrives
+    if references(:security_groups).present?
+      @security_groups = network_service.handled_list(:security_groups, {}, openstack_network_admin?)
+    end
+
+    # New: fetch SGs for targeted tenants
+    if references(:cloud_tenants).present?
+      references(:cloud_tenants).each do |tenant_id|
+        @security_groups += network_service.handled_list(:security_groups, {:tenant_id => tenant_id}, true)
+      end
+    end
+
+    @security_groups = @security_groups.compact.uniq { |sg| sg.respond_to?(:id) ? sg.id : sg['id'] }
   end
 
   def firewall_rules
     return [] unless network_service
-    return [] if references(:firewall_rules).blank?
-    return @firewall_rules if @firewall_rules.any?
+    return @firewall_rules if @firewall_rules&.any?
 
-    @firewall_rules = network_service.handled_list(:security_group_rules, {}, openstack_network_admin?)
+    if references(:firewall_rules).present? || references(:security_groups).present? || references(:cloud_tenants).present?
+      @firewall_rules = network_service.handled_list(:security_group_rules, {}, true)
+    else
+      @firewall_rules = []
+    end
+
+    @firewall_rules
   end
 
   def floating_ips
@@ -158,6 +193,34 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
     @tenant_memo[tenant_id]
   end
 
+  def quotas
+    return [] if references(:cloud_tenants).blank?
+
+    handle_tenants = @os_handle.tenants
+    results = []
+
+    references(:cloud_tenants).each do |tenant_id|
+      tenant = handle_tenants.detect { |t| (t.respond_to?(:id) ? t.id : t['id']) == tenant_id }
+      unless tenant
+        $log.warn("Tenant not found for quota refresh: #{tenant_id}")
+        next
+      end
+
+      tenant_id_val = tenant.respond_to?(:id) ? tenant.id : tenant['id']
+      tenant_name = tenant.respond_to?(:name) ? tenant.name : tenant['name']
+      %w[Compute Volume Network].each do |service_name|
+        svc = @os_handle.detect_service(service_name, tenant_name)
+        unless svc
+          $log.warn("Service #{service_name} not available for tenant #{tenant_id_val} during quota refresh")
+          next
+        end
+        q = fetch_quota_for_service(svc, service_name, tenant_id_val)
+        results << q if q.is_a?(Hash)
+      end
+    end
+    results
+  end
+
   def key_pairs
     # keypair notifications from panko don't include ids, so
     # we will just refresh all the keypairs if we get an event.
@@ -167,7 +230,8 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
   end
 
   def server_groups
-    @server_groups ||= compute_service.handled_list(:server_groups, {}, openstack_admin?)
+    return [] if references(:vms).blank?
+    @server_groups ||= compute_service.handled_list(:server_groups, {}, true)
   end
 
   def server_group_by_vm_id
@@ -305,6 +369,28 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
   end
 
   private
+
+  def fetch_quota_for_service(svc, service_name, tenant_id_val)
+    body = svc.get_quota(tenant_id_val).body
+    q = (service_name == "Network") ? body['quota'] : body['quota_set']
+    unless q.is_a?(Hash)
+      $log.warn("Quota response for tenant #{tenant_id_val} #{service_name} is not a hash, skipping")
+      return nil
+    end
+    q.merge('tenant_id' => tenant_id_val, 'service_name' => service_name)
+  rescue Excon::Errors::NotFound,
+         Excon::Error::Timeout,
+         Excon::Error::Socket => err
+    $log.warn("Failed to fetch quota for tenant #{tenant_id_val} #{service_name}: #{err.message}")
+    nil
+  rescue Fog::OpenStack::Compute::NotFound,
+         Fog::OpenStack::Volume::NotFound,
+         Fog::OpenStack::Network::NotFound,
+         Fog::Errors::TimeoutError,
+         Fog::Errors::Error => err
+    $log.warn("Failed to fetch quota for tenant #{tenant_id_val} #{service_name}: #{err.message}")
+    nil
+  end
 
   def parse_targets!
     target.targets.each do |t|
