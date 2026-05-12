@@ -19,7 +19,7 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::EventTarget
   # @param ems_event [EmsEvent] EmsEvent object
   # @return [Array] Array of InventoryRefresh::Target objects
   def parse_ems_event_targets(ems_event)
-    $log.debug("(Target Refresh) - MIQ(#{self.class.name}) Processing storage event: #{ems_event.event_type}") if $log
+    $log.info("(Target Refresh) - MIQ(#{self.class.name}) Processing storage event: #{ems_event.event_type}") if $log
 
     target_collection = InventoryRefresh::TargetCollection.new(
       :manager => ems_event.ext_management_system.parent_manager,
@@ -39,7 +39,7 @@ class ManageIQ::Providers::Openstack::StorageManager::CinderManager::EventTarget
       collect_backup_references!(target_collection)
     end
 
-    $log.debug("(Target Refresh) - MIQ(#{self.class.name}) Collected #{target_collection.targets.count} target(s) for #{ems_event.event_type}") if $log
+    $log.info("(Target Refresh) - MIQ(#{self.class.name}) Collected #{target_collection.targets.count} target(s) for #{ems_event.event_type}") if $log
     target_collection.targets
   end
 

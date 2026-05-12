@@ -12,7 +12,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::EventTargetParser
   private
 
   def parse_ems_event_targets(ems_event)
-    $log.debug("(Target Refresh) - MIQ(#{self.class.name}) Processing network event: #{ems_event.event_type}") if $log
+    $log.info("(Target Refresh) - MIQ(#{self.class.name}) Processing network event: #{ems_event.event_type}") if $log
     
     target_collection = InventoryRefresh::TargetCollection.new(:manager => ems_event.ext_management_system.parent_manager, :event => ems_event)
 
@@ -48,7 +48,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::EventTargetParser
       collect_router_interface_targets!(target_collection)
     end
 
-    $log.debug("(Target Refresh) - MIQ(#{self.class.name}) Collected #{target_collection.targets.count} target(s) for #{ems_event.event_type}") if $log
+    $log.info("(Target Refresh) - MIQ(#{self.class.name}) Collected #{target_collection.targets.count} target(s) for #{ems_event.event_type}") if $log
     target_collection.targets
   end
 
