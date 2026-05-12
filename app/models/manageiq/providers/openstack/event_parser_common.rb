@@ -6,7 +6,7 @@ module ManageIQ::Providers::Openstack::EventParserCommon
     payload = content.fetch("payload", {})
 
     log_header = "ems_id: [#{ems_id}] " unless ems_id.nil?
-    _log.debug("(Target Refresh) - #{log_header}event: [#{event_type}]") if $log && $log.debug?
+    _log.info("(Target Refresh) - #{log_header}event: [#{event_type}]") if $log && $log.info?
 
     event_hash = {
       :event_type => event_type,
@@ -36,7 +36,7 @@ module ManageIQ::Providers::Openstack::EventParserCommon
     if oslo_message
       begin
         parsed = JSON.parse(oslo_message)
-        _log.debug("(Target Refresh) - Oslo message parsed successfully for event: #{parsed['event_type']}") if $log && $log.debug?
+        _log.info("(Target Refresh) - Oslo message parsed successfully for event: #{parsed['event_type']}") if $log && $log.info?
         parsed
       rescue JSON::ParserError => e
         _log.warn("(Target Refresh) - Failed to parse Oslo message: #{e.message}") if $log

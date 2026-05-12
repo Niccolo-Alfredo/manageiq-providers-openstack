@@ -12,7 +12,7 @@ class ManageIQ::Providers::Openstack::CloudManager::EventTargetParser
   private
 
   def parse_ems_event_targets(ems_event)
-    $log.debug("(Target Refresh) - MIQ(#{self.class.name}) Processing event: #{ems_event.event_type}") if $log
+    $log.info("(Target Refresh) - MIQ(#{self.class.name}) Processing event: #{ems_event.event_type}") if $log
     
     target_collection = InventoryRefresh::TargetCollection.new(:manager => ems_event.ext_management_system, :event => ems_event)
 
@@ -33,7 +33,7 @@ class ManageIQ::Providers::Openstack::CloudManager::EventTargetParser
       collect_identity_project_references!(target_collection)
     end
 
-    $log.debug("(Target Refresh) - MIQ(#{self.class.name}) Collected #{target_collection.targets.count} target(s) for #{ems_event.event_type}") if $log
+    $log.info("(Target Refresh) - MIQ(#{self.class.name}) Collected #{target_collection.targets.count} target(s) for #{ems_event.event_type}") if $log
     target_collection.targets
   end
 
