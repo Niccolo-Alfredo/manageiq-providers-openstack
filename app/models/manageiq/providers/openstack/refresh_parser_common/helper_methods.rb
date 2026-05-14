@@ -77,6 +77,52 @@ module ManageIQ::Providers
         def safe_list(&block)
           safe_call(&block) || []
         end
+
+        # TCOS troubleshooting: dedicated logger writing to its own file so the
+        # analysis log stays clean. Path is overridable via env TCOS_REFRESH_LOG.
+        # Default: <Rails.root>/log/tcos_refresh.log (or /tmp fallback).
+        def self.tcos_refresh_logger
+          @tcos_refresh_logger ||= begin
+            path = ENV['TCOS_REFRESH_LOG'].presence ||
+                   (defined?(Rails) && Rails.root ? Rails.root.join('log', 'tcos_refresh.log').to_s : '/tmp/tcos_refresh.log')
+            FileUtils.mkdir_p(File.dirname(path))
+            # 50MB x 5 rotated files
+            logger = Logger.new(path, 5, 50 * 1024 * 1024)
+            logger.formatter = proc do |sev, time, _prog, msg|
+              "#{time.utc.iso8601(3)} #{sev} pid=#{Process.pid} #{msg}\n"
+            end
+            logger.level = Logger::INFO
+            logger
+          end
+        end
+
+        # Timing/structured log for refresh hot paths. Writes ONLY to the
+        # dedicated TCOS refresh log (not evm.log). Grep `[TCOS-REFRESH]`.
+        def tcos_time(label, desc: nil, **ctx)
+          t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          ems_id = if respond_to?(:manager) && manager
+                     manager.id
+                   elsif respond_to?(:persister) && persister.respond_to?(:manager) && persister.manager
+                     persister.manager.id
+                   else
+                     instance_variable_get(:@manager)&.id
+                   end
+          ctx_str = ctx.map { |k, v| "#{k}=#{v}" }.join(' ')
+          desc_str = desc ? %( desc="#{desc}") : ''
+          logger = ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_refresh_logger
+          logger.info("[TCOS-REFRESH] ems=#{ems_id} #{label} start#{desc_str} #{ctx_str}".rstrip)
+          result = yield
+          elapsed_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000).round(1)
+          size = result.respond_to?(:size) ? result.size : nil
+          logger.info("[TCOS-REFRESH] ems=#{ems_id} #{label} end elapsed_ms=#{elapsed_ms}#{size ? " size=#{size}" : ''}#{desc_str} #{ctx_str}".rstrip)
+          result
+        rescue => err
+          elapsed_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000).round(1)
+          ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_refresh_logger.warn(
+            "[TCOS-REFRESH] ems=#{ems_id} #{label} error elapsed_ms=#{elapsed_ms} err=#{err.class}: #{err.message}#{desc_str} #{ctx_str}".rstrip
+          )
+          raise
+        end
       end
     end
   end
