@@ -54,6 +54,30 @@ module ManageIQ::Providers::Openstack::EventCatcherRunnerMixin
   def queue_event(event)
     _log.info("#{log_prefix} Caught event [#{event.payload["event_type"]}]")
 
+    payload     = event.payload
+    event_type  = payload["event_type"]
+    nested      = payload["payload"].is_a?(Hash) ? payload["payload"] : {}
+    instance_id = payload["instance_id"] || nested["instance_id"]
+    tenant_id   = payload["tenant_id"]   || nested["tenant_id"] || payload["_context_project_id"]
+    event_ts    = payload["timestamp"]   || nested["timestamp"]  || payload["_context_timestamp"]
+    lag_ms = nil
+    if event_ts
+      begin
+        lag_ms = ((Time.now.utc - Time.parse(event_ts.to_s).utc) * 1000).round(1)
+      rescue ArgumentError
+      end
+    end
+    ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_event(
+      "event_catcher.queue_event",
+      :ems_id => @cfg && @cfg[:ems_id],
+      :kind   => "event",
+      :desc   => "AMQP: evento OpenStack ricevuto e accodato a MiqQueue",
+      :event_type => event_type,
+      :vm_ems_ref => instance_id,
+      :tenant_id  => tenant_id,
+      :lag_ms_from_nova => lag_ms
+    )
+
     event_hash = {}
     # copy content
     content = event.payload

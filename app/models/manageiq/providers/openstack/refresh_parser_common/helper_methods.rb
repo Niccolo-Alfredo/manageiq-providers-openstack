@@ -109,8 +109,7 @@ module ManageIQ::Providers
           probe.class.name.to_s.include?("TargetCollection") ? "target" : "full"
         end
 
-        def tcos_time(label, desc: nil, **ctx)
-          t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        def tcos_time(label, desc: nil, **ctx, &block)
           ems_id = if respond_to?(:manager) && manager
                      manager.id
                    elsif respond_to?(:persister) && persister.respond_to?(:manager) && persister.manager
@@ -119,9 +118,16 @@ module ManageIQ::Providers
                      instance_variable_get(:@manager)&.id
                    end
           kind = tcos_refresh_kind
+          ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_time(label, ems_id: ems_id, kind: kind, desc: desc, **ctx, &block)
+        end
+
+        # Module-level variant: callable from any class (provision, event
+        # catcher, event target parser). Pass ems_id/kind explicitly.
+        def self.tcos_time(label, ems_id: nil, kind: "provision", desc: nil, **ctx)
+          t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
           ctx_str = ctx.map { |k, v| "#{k}=#{v}" }.join(' ')
           desc_str = desc ? %( desc="#{desc}") : ''
-          logger = ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_refresh_logger
+          logger = tcos_refresh_logger
           logger.info("[TCOS-REFRESH] ems=#{ems_id} kind=#{kind} #{label} start#{desc_str} #{ctx_str}".rstrip)
           result = yield
           elapsed_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000).round(1)
@@ -130,10 +136,18 @@ module ManageIQ::Providers
           result
         rescue => err
           elapsed_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000).round(1)
-          ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_refresh_logger.warn(
+          tcos_refresh_logger.warn(
             "[TCOS-REFRESH] ems=#{ems_id} kind=#{kind} #{label} error elapsed_ms=#{elapsed_ms} err=#{err.class}: #{err.message}#{desc_str} #{ctx_str}".rstrip
           )
           raise
+        end
+
+        # Module-level fire-and-forget marker (no timing). For one-shot events
+        # like event_received / target_built.
+        def self.tcos_event(label, ems_id: nil, kind: "event", desc: nil, **ctx)
+          ctx_str = ctx.map { |k, v| "#{k}=#{v}" }.join(' ')
+          desc_str = desc ? %( desc="#{desc}") : ''
+          tcos_refresh_logger.info("[TCOS-REFRESH] ems=#{ems_id} kind=#{kind} #{label}#{desc_str} #{ctx_str}".rstrip)
         end
       end
     end
