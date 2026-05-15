@@ -8,7 +8,7 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
       tcos_time("parse_targets", desc: "classifica i target in arrivo (VM, tenant, stack, volume)") { parse_targets! }
       tcos_time("infer_related_ems_refs", desc: "espande i target con oggetti correlati da DB e API") { infer_related_ems_refs! }
       refs_summary = %i[vms cloud_tenants cloud_volumes orchestration_stacks network_ports network_routers security_groups cloud_networks floating_ips images flavors key_pairs].map { |k| "#{k}=#{references(k)&.size || 0}" }.join(' ')
-      ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_refresh_logger.info("[TCOS-REFRESH] ems=#{manager.id} target_collection.refs #{refs_summary}")
+      ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_refresh_logger.info("[TCOS-REFRESH] ems=#{manager.id} kind=target target_collection.refs #{refs_summary}")
     end
     # Reset the target cache, so we can access new targets inside
     target.manager_refs_by_association_reset

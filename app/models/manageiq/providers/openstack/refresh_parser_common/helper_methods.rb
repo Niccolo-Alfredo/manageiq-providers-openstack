@@ -98,6 +98,17 @@ module ManageIQ::Providers
 
         # Timing/structured log for refresh hot paths. Writes ONLY to the
         # dedicated TCOS refresh log (not evm.log). Grep `[TCOS-REFRESH]`.
+        # Detect refresh kind: "target" if running inside a TargetCollection
+        # (or a parser whose collector is a TargetCollection), otherwise "full".
+        def tcos_refresh_kind
+          probe = if respond_to?(:collector) && collector
+                    collector
+                  else
+                    self
+                  end
+          probe.class.name.to_s.include?("TargetCollection") ? "target" : "full"
+        end
+
         def tcos_time(label, desc: nil, **ctx)
           t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
           ems_id = if respond_to?(:manager) && manager
@@ -107,19 +118,20 @@ module ManageIQ::Providers
                    else
                      instance_variable_get(:@manager)&.id
                    end
+          kind = tcos_refresh_kind
           ctx_str = ctx.map { |k, v| "#{k}=#{v}" }.join(' ')
           desc_str = desc ? %( desc="#{desc}") : ''
           logger = ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_refresh_logger
-          logger.info("[TCOS-REFRESH] ems=#{ems_id} #{label} start#{desc_str} #{ctx_str}".rstrip)
+          logger.info("[TCOS-REFRESH] ems=#{ems_id} kind=#{kind} #{label} start#{desc_str} #{ctx_str}".rstrip)
           result = yield
           elapsed_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000).round(1)
           size = result.respond_to?(:size) ? result.size : nil
-          logger.info("[TCOS-REFRESH] ems=#{ems_id} #{label} end elapsed_ms=#{elapsed_ms}#{size ? " size=#{size}" : ''}#{desc_str} #{ctx_str}".rstrip)
+          logger.info("[TCOS-REFRESH] ems=#{ems_id} kind=#{kind} #{label} end elapsed_ms=#{elapsed_ms}#{size ? " size=#{size}" : ''}#{desc_str} #{ctx_str}".rstrip)
           result
         rescue => err
           elapsed_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000).round(1)
           ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_refresh_logger.warn(
-            "[TCOS-REFRESH] ems=#{ems_id} #{label} error elapsed_ms=#{elapsed_ms} err=#{err.class}: #{err.message}#{desc_str} #{ctx_str}".rstrip
+            "[TCOS-REFRESH] ems=#{ems_id} kind=#{kind} #{label} error elapsed_ms=#{elapsed_ms} err=#{err.class}: #{err.message}#{desc_str} #{ctx_str}".rstrip
           )
           raise
         end
