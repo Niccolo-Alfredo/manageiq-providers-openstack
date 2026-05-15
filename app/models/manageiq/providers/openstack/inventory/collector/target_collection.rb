@@ -119,13 +119,23 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
     return [] unless network_service
     return @firewall_rules if @firewall_rules&.any?
 
-    if references(:firewall_rules).present? || references(:security_groups).present? || references(:cloud_tenants).present?
-      @firewall_rules = tcos_time("firewall_rules.full_list", desc: "Neutron: lista completa di tutte le regole dei security group") { network_service.handled_list(:security_group_rules, {}, true) }
-    else
-      @firewall_rules = []
+    @firewall_rules = []
+
+    # Preferred path: scope rule fetch to targeted tenants (avoids full list)
+    if references(:cloud_tenants).present?
+      tcos_time("firewall_rules.per_tenant_loop", desc: "Neutron: ciclo che recupera le regole SG tenant per tenant", tenant_count: references(:cloud_tenants).size) do
+        references(:cloud_tenants).each do |tenant_id|
+          @firewall_rules += tcos_time("firewall_rules.fetch_one", desc: "Neutron: singola chiamata GET security_group_rules per un tenant", tenant_id: tenant_id) do
+            network_service.handled_list(:security_group_rules, {:tenant_id => tenant_id}, true)
+          end
+        end
+      end
+    # Fallback: explicit firewall_rules or security_groups refs without tenant scope
+    elsif references(:firewall_rules).present? || references(:security_groups).present?
+      @firewall_rules = tcos_time("firewall_rules.full_list", desc: "Neutron: lista completa di tutte le regole dei security group (fallback no-tenant)") { network_service.handled_list(:security_group_rules, {}, true) }
     end
 
-    @firewall_rules
+    @firewall_rules = @firewall_rules.compact.uniq { |r| r.respond_to?(:id) ? r.id : r['id'] }
   end
 
   def floating_ips
