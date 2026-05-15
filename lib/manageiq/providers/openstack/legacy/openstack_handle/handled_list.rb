@@ -7,6 +7,37 @@ require 'manageiq/providers/openstack/legacy/openstack_handle/multi_tenancy/opti
 
 module OpenstackHandle
   module HandledList
+    # TCOS: estrae host/port/path/scheme/url da un Fog service per logging.
+    def self.tcos_endpoint_info(svc)
+      return {} if svc.nil?
+      info = {}
+      if svc.respond_to?(:connection) && svc.connection.respond_to?(:data)
+        d = svc.connection.data
+        info[:scheme] = d[:scheme]
+        info[:host]   = d[:host]
+        info[:port]   = d[:port]
+        info[:path]   = d[:path]
+      end
+      mgmt = svc.instance_variable_get(:@openstack_management_url)
+      info[:mgmt_url] = mgmt if mgmt
+      info
+    rescue => _
+      {}
+    end
+
+    def tcos_log_endpoint_warn(collection_type, kind, err)
+      info = OpenstackHandle::HandledList.tcos_endpoint_info(self)
+      service_name = self.class.const_defined?(:SERVICE_NAME) ? self.class::SERVICE_NAME : self.class.name
+      kv = info.map { |k, v| "#{k}=#{v}" }.join(' ')
+      msg = "[TCOS-ENDPOINT] event=#{kind} service=#{service_name} collection=#{collection_type} project=#{@os_handle&.project_name} #{kv} err=#{err.class}: #{err.message}"
+      _log.warn(msg)
+      begin
+        ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_refresh_logger.warn(msg)
+      rescue StandardError
+        nil
+      end
+    end
+
     def handled_list(collection_type, options = {}, all_tenants = nil)
       # Will automatically handle multi-tenancy and pagination of all Fog list methods, so we always get all openstack
       # entities back. The exceptions of each service and collection type will be solved in <service_name>)_delegate
@@ -43,6 +74,7 @@ module OpenstackHandle
     rescue Excon::Error::Timeout, Fog::Errors::TimeoutError => err
       _log.warn "Timeout trying to find data for project: #{@os_handle.project_name}, for collection type: #{collection_type}, "\
                 "in provider: #{@os_handle.address}. Message=#{err.message}"
+      tcos_log_endpoint_warn(collection_type, "timeout", err)
       _log.warn err.backtrace.join("\n")
       []
     rescue => err

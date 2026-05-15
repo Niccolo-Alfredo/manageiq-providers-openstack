@@ -54,12 +54,24 @@ module ManageIQ::Providers::Openstack::EventCatcherRunnerMixin
   def queue_event(event)
     _log.info("#{log_prefix} Caught event [#{event.payload["event_type"]}]")
 
-    payload     = event.payload
-    event_type  = payload["event_type"]
-    nested      = payload["payload"].is_a?(Hash) ? payload["payload"] : {}
-    instance_id = payload["instance_id"] || nested["instance_id"]
-    tenant_id   = payload["tenant_id"]   || nested["tenant_id"] || payload["_context_project_id"]
-    event_ts    = payload["timestamp"]   || nested["timestamp"]  || payload["_context_timestamp"]
+    raw         = event.payload || {}
+    # OpenStack notifications wrap real content in oslo.message (JSON string).
+    # Unwrap it; fall back to the raw payload for non-oslo events.
+    content =
+      if raw.is_a?(Hash) && raw["oslo.message"]
+        begin
+          JSON.parse(raw["oslo.message"])
+        rescue JSON::ParserError
+          raw
+        end
+      else
+        raw
+      end
+    nested      = content["payload"].is_a?(Hash) ? content["payload"] : {}
+    event_type  = content["event_type"]
+    instance_id = content["instance_id"] || nested["instance_id"]
+    tenant_id   = content["tenant_id"]   || nested["tenant_id"] || content["_context_project_id"]
+    event_ts    = content["timestamp"]   || nested["timestamp"]  || content["_context_timestamp"]
     lag_ms = nil
     if event_ts
       begin
