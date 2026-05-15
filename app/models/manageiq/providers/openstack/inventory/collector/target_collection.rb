@@ -96,9 +96,16 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
 
     @security_groups = []
 
-    # Existing: fetch all SGs when any SG event arrives
+    # Fetch only the specific SGs referenced (not the full list).
     if references(:security_groups).present?
-      @security_groups = network_service.handled_list(:security_groups, {}, openstack_network_admin?)
+      tcos_time("security_groups.fetch_by_ref_loop", desc: "Neutron: fetch puntuale dei security group referenziati", sg_count: references(:security_groups).size) do
+        references(:security_groups).each do |sg_id|
+          sg = tcos_time("security_groups.fetch_by_id", desc: "Neutron: GET singolo security_group per id", sg_id: sg_id) do
+            safe_get { network_service.security_groups.get(sg_id) }
+          end
+          @security_groups << sg if sg
+        end
+      end
     end
 
     # New: fetch SGs for targeted tenants
