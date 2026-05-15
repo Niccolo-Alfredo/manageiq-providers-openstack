@@ -172,7 +172,7 @@ module OpenstackHandle
         opts[:openstack_user_domain_id]    = domain
       end
 
-      opts[:openstack_region] = region unless service == "Identity"
+      opts[:openstack_region] = region
 
       svc_cache = (@connection_cache[service] ||= {})
       svc_cache[tenant] ||= begin
