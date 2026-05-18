@@ -3,13 +3,33 @@ class ManageIQ::Providers::Openstack::Inventory::Parser::NetworkManager < Manage
 
   def parse
     tcos_time("parser.network_manager.parse", desc: "fase totale di parsing degli oggetti di rete Neutron") do
-      tcos_time("parser.network.cloud_networks", desc: "trasforma le reti Neutron in oggetti inventory") { cloud_networks }
-      tcos_time("parser.network.cloud_subnets", desc: "trasforma le subnet in oggetti inventory") { cloud_subnets }
-      tcos_time("parser.network.floating_ips", desc: "trasforma i floating IP in oggetti inventory") { floating_ips }
-      tcos_time("parser.network.network_ports", desc: "trasforma le porte di rete (e relativi IP) in oggetti inventory") { network_ports }
-      tcos_time("parser.network.network_routers", desc: "trasforma i router Neutron in oggetti inventory") { network_routers }
-      tcos_time("parser.network.security_groups", desc: "trasforma i security group in oggetti inventory") { security_groups }
-      tcos_time("parser.network.firewall_rules", desc: "trasforma le regole dei security group in oggetti inventory") { firewall_rules }
+      tcos_time("parser.network.cloud_networks", desc: "trasforma le reti Neutron in oggetti inventory") { cloud_networks } if parse_section?(:cloud_networks)
+      tcos_time("parser.network.cloud_subnets", desc: "trasforma le subnet in oggetti inventory") { cloud_subnets } if parse_section?(:cloud_subnets)
+      tcos_time("parser.network.floating_ips", desc: "trasforma i floating IP in oggetti inventory") { floating_ips } if parse_section?(:floating_ips)
+      tcos_time("parser.network.network_ports", desc: "trasforma le porte di rete (e relativi IP) in oggetti inventory") { network_ports } if parse_section?(:network_ports)
+      tcos_time("parser.network.network_routers", desc: "trasforma i router Neutron in oggetti inventory") { network_routers } if parse_section?(:network_routers)
+      tcos_time("parser.network.security_groups", desc: "trasforma i security group in oggetti inventory") { security_groups } if parse_section?(:security_groups)
+      tcos_time("parser.network.firewall_rules", desc: "trasforma le regole dei security group in oggetti inventory") { firewall_rules } if parse_section?(:firewall_rules)
+    end
+  end
+
+  # On targeted refresh, skip a network section entirely if the collector has
+  # nothing for it. On full refresh the collector is the non-targeted one and
+  # this always returns true. This avoids the parser doing setup work
+  # (lazy_finds, tcos_time wrappers) for empty inventories on volume/vm-only
+  # targeted refreshes after the collector-level tenant_scope_active? gating.
+  def parse_section?(section)
+    return true unless collector.kind_of?(ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection)
+
+    case section
+    when :cloud_networks    then collector.references(:cloud_networks).present?
+    when :cloud_subnets     then collector.references(:cloud_subnets).present? || collector.references(:cloud_networks).present? || collector.references(:network_ports).present?
+    when :floating_ips      then collector.references(:floating_ips).present? || collector.references(:floating_ips_by_address).present?
+    when :network_ports     then collector.references(:network_ports).present? || collector.references(:network_routers).present? || (collector.tenant_scope_active? && collector.references(:cloud_tenants).present?)
+    when :network_routers   then collector.references(:network_routers).present?
+    when :security_groups   then collector.references(:security_groups).present? || (collector.tenant_scope_active? && collector.references(:cloud_tenants).present?)
+    when :firewall_rules    then collector.references(:firewall_rules).present? || collector.references(:security_groups).present? || (collector.tenant_scope_active? && collector.references(:cloud_tenants).present?)
+    else true
     end
   end
 
