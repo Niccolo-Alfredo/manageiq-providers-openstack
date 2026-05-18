@@ -20,9 +20,13 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
                                         .collect(&:manager_uuids)
                                         .map(&:to_a)
                                         .flatten
+          sg_ids = inventory_collection.parent
+                                       .security_groups
+                                       .where(:ems_ref => sg_refs)
+                                       .pluck(:id)
           inventory_collection.parent.firewall_rules
-                              .joins(:resource)
-                              .where('security_groups.ems_ref' => sg_refs)
+                              .where(:resource_type => "SecurityGroup",
+                                     :resource_id   => sg_ids)
         end
       )
     end
@@ -36,9 +40,12 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
                                             .collect(&:manager_uuids)
                                             .map(&:to_a)
                                             .flatten
+          tenant_ids = inventory_collection.parent
+                                           .cloud_tenants
+                                           .where(:ems_ref => tenant_refs)
+                                           .pluck(:id)
           inventory_collection.parent.network_ports
-                              .joins(:cloud_tenant)
-                              .where('cloud_tenants.ems_ref' => tenant_refs)
+                              .where(:cloud_tenant_id => tenant_ids)
         end
       )
     end
@@ -51,9 +58,12 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
                                             .collect(&:manager_uuids)
                                             .map(&:to_a)
                                             .flatten
+          tenant_ids = inventory_collection.parent
+                                           .cloud_tenants
+                                           .where(:ems_ref => tenant_refs)
+                                           .pluck(:id)
           inventory_collection.parent.security_groups
-                              .joins(:cloud_tenant)
-                              .where('cloud_tenants.ems_ref' => tenant_refs)
+                              .where(:cloud_tenant_id => tenant_ids)
         end
       )
       # targeted refresh workaround-- always refresh the whole security group collection
