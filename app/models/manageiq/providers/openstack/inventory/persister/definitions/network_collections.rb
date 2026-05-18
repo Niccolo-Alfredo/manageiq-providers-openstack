@@ -9,6 +9,18 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
 
     add_network_collection(:cloud_subnet_network_ports) do |builder|
       builder.add_properties(:parent_inventory_collections => %i[vms network_ports])
+      builder.add_targeted_arel(
+        lambda do |inventory_collection|
+          np_refs = inventory_collection.parent_inventory_collections
+                                        .select { |c| c.name == :network_ports }
+                                        .flat_map { |c| c.manager_uuids.to_a }
+          np_ids = inventory_collection.parent.network_ports
+                                       .where(:ems_ref => np_refs)
+                                       .pluck(:id)
+          inventory_collection.parent.cloud_subnet_network_ports
+                              .where(:network_port_id => np_ids)
+        end
+      )
     end
 
     add_network_collection(:firewall_rules) do |builder|
