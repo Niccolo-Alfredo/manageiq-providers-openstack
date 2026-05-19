@@ -179,16 +179,6 @@ module OpenstackHandle
         opts[:connection_options] = (connection_options || {}).merge(excon_options)
         opts[:ssl_options]        = ssl_options
 
-        # Token sharing: reuse a previously obtained scoped token for the
-        # same tenant to avoid re-authenticating Fog for every service.
-        # If Fog ignores the token (e.g. because the catalog isn't reusable
-        # for this service), it will fall back to a normal auth, so this
-        # change is a safe optimisation.
-        if (shared = cached_auth_for_tenant(tenant))
-          opts[:openstack_auth_token]               ||= shared[:token]
-          opts[:openstack_identity_public_endpoint] ||= shared[:identity_endpoint] if shared[:identity_endpoint]
-        end
-
         raw_service = self.class.raw_connect_try_ssl(username, password, address, port, service, opts,
                                                      security_protocol)
 
@@ -201,32 +191,6 @@ module OpenstackHandle
           raw_service
         end
       end
-    end
-
-    # Returns {:token => "...", :identity_endpoint => "..."} for any service
-    # already authenticated against the given tenant in this handle, or nil
-    # when no cached service exists for that tenant yet.
-    def cached_auth_for_tenant(tenant)
-      @connection_cache.each_value do |by_tenant|
-        wrapper = by_tenant[tenant]
-        next unless wrapper
-
-        raw = wrapper.respond_to?(:service) ? wrapper.service : wrapper
-        token = raw.respond_to?(:auth_token) ? raw.auth_token : nil
-        next if token.blank?
-
-        endpoint =
-          if raw.respond_to?(:openstack_identity_public_endpoint)
-            raw.openstack_identity_public_endpoint
-          end
-        endpoint ||= raw.instance_variable_get(:@openstack_identity_public_endpoint)
-
-        return {:token => token, :identity_endpoint => endpoint}
-      end
-      nil
-    rescue StandardError => err
-      $fog_log.warn("MIQ(#{self.class.name}##{__method__}) token reuse lookup failed: #{err}") if defined?($fog_log)
-      nil
     end
 
     def baremetal_service(tenant_name = nil)
