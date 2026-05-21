@@ -26,19 +26,31 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::CloudC
     end
     add_cloud_collection(:networks)
 
-    add_cloud_collection(:cloud_resource_quotas) do |builder|
-      builder.add_properties(:parent_inventory_collections => %i[cloud_tenants])
-      builder.add_targeted_arel(
-        lambda do |inventory_collection|
-          tenant_refs = inventory_collection.parent_inventory_collections
-                                            .collect(&:manager_uuids)
-                                            .map(&:to_a)
-                                            .flatten
-          inventory_collection.parent.cloud_resource_quotas
-                              .joins(:cloud_tenant)
-                              .where('cloud_tenants.ems_ref' => tenant_refs)
-        end
-      )
+    # cloud_resource_quotas: tenant-scoped `targeted_arel` archives every
+    # quota of the referenced tenants when the collector returns []. The
+    # collector only fetches quotas on tenant-triggered refreshes
+    # (see `Collector::TargetCollection#quotas`), but parser code adds a
+    # `cloud_tenants` reference whenever a VM/Volume/etc is created — so
+    # without this gate the arel scope is non-empty and every quota for
+    # the VM's tenant gets archived on creation.
+    #
+    # Mirror the collector gate: only register when the refresh actually
+    # collects quotas. Full refresh (`!targeted?`) always registers.
+    if register_cloud_resource_quotas?
+      add_cloud_collection(:cloud_resource_quotas) do |builder|
+        builder.add_properties(:parent_inventory_collections => %i[cloud_tenants])
+        builder.add_targeted_arel(
+          lambda do |inventory_collection|
+            tenant_refs = inventory_collection.parent_inventory_collections
+                                              .collect(&:manager_uuids)
+                                              .map(&:to_a)
+                                              .flatten
+            inventory_collection.parent.cloud_resource_quotas
+                                .joins(:cloud_tenant)
+                                .where('cloud_tenants.ems_ref' => tenant_refs)
+          end
+        )
+      end
     end
 
     unless targeted?
@@ -102,6 +114,19 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::CloudC
         end
       )
     end
+  end
+
+  # Mirrors the collector branches in
+  # `Collector::TargetCollection#quotas`: the collector returns [] unless
+  # the refresh has explicit `cloud_tenants` references AND is
+  # tenant-triggered. Full refresh (`!targeted?`) always collects quotas.
+  #
+  # Keeping persister registration and collector fetch in lock-step
+  # prevents the "VM create archives all tenant quotas" bug — see
+  # comment on `cloud_resource_quotas` above.
+  def register_cloud_resource_quotas?
+    return true unless targeted?
+    references(:cloud_tenants).present? && tenant_scope_active?
   end
 
   def add_vm_and_template_taggings
