@@ -18,3 +18,5 @@
 /spec/manageiq
 
 .DS_Store
+/graphify-out/
+/.idea/

@@ -19,20 +19,47 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
     add_network_collection(:floating_ips)
     add_network_collection(:network_routers)
 
-    add_network_collection(:cloud_subnet_network_ports) do |builder|
-      builder.add_properties(:parent_inventory_collections => %i[vms network_ports])
-      builder.add_targeted_arel(
-        lambda do |inventory_collection|
-          np_refs = inventory_collection.parent_inventory_collections
-                                        .select { |c| c.name == :network_ports }
-                                        .flat_map { |c| c.manager_uuids.to_a }
-          np_ids = inventory_collection.parent.network_ports
-                                       .where(:ems_ref => np_refs)
-                                       .pluck(:id)
-          inventory_collection.parent.cloud_subnet_network_ports
-                              .where(:network_port_id => np_ids)
-        end
-      )
+    # network_ports: collector fetches by explicit port/router refs, or
+    # tenant-wide when the refresh is tenant-triggered.
+    #
+    # cloud_subnet_network_ports declares `network_ports` as a parent
+    # inventory collection, so it MUST be registered together with
+    # `network_ports` — the scanner raises if a declared parent is missing.
+    if register_network_ports?
+      add_network_collection(:network_ports) do |builder|
+        builder.add_properties(:delete_method => :disconnect_port)
+        builder.add_properties(:parent_inventory_collections => %i[cloud_tenants])
+        builder.add_targeted_arel(
+          lambda do |inventory_collection|
+            tenant_refs = inventory_collection.parent_inventory_collections
+                                              .collect(&:manager_uuids)
+                                              .map(&:to_a)
+                                              .flatten
+            tenant_ids = inventory_collection.parent
+                                             .cloud_tenants
+                                             .where(:ems_ref => tenant_refs)
+                                             .pluck(:id)
+            inventory_collection.parent.network_ports
+                                .where(:cloud_tenant_id => tenant_ids)
+          end
+        )
+      end
+
+      add_network_collection(:cloud_subnet_network_ports) do |builder|
+        builder.add_properties(:parent_inventory_collections => %i[vms network_ports])
+        builder.add_targeted_arel(
+          lambda do |inventory_collection|
+            np_refs = inventory_collection.parent_inventory_collections
+                                          .select { |c| c.name == :network_ports }
+                                          .flat_map { |c| c.manager_uuids.to_a }
+            np_ids = inventory_collection.parent.network_ports
+                                         .where(:ems_ref => np_refs)
+                                         .pluck(:id)
+            inventory_collection.parent.cloud_subnet_network_ports
+                                .where(:network_port_id => np_ids)
+          end
+        )
+      end
     end
 
     # firewall_rules: collector fetches them either tenant-wide (when the
@@ -54,29 +81,6 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
             inventory_collection.parent.firewall_rules
                                 .where(:resource_type => "SecurityGroup",
                                        :resource_id   => sg_ids)
-          end
-        )
-      end
-    end
-
-    # network_ports: collector fetches by explicit port/router refs, or
-    # tenant-wide when the refresh is tenant-triggered.
-    if register_network_ports?
-      add_network_collection(:network_ports) do |builder|
-        builder.add_properties(:delete_method => :disconnect_port)
-        builder.add_properties(:parent_inventory_collections => %i[cloud_tenants])
-        builder.add_targeted_arel(
-          lambda do |inventory_collection|
-            tenant_refs = inventory_collection.parent_inventory_collections
-                                              .collect(&:manager_uuids)
-                                              .map(&:to_a)
-                                              .flatten
-            tenant_ids = inventory_collection.parent
-                                             .cloud_tenants
-                                             .where(:ems_ref => tenant_refs)
-                                             .pluck(:id)
-            inventory_collection.parent.network_ports
-                                .where(:cloud_tenant_id => tenant_ids)
           end
         )
       end
