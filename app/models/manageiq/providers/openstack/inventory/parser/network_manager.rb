@@ -230,6 +230,6 @@ class ManageIQ::Providers::Openstack::Inventory::Parser::NetworkManager < Manage
   # refreshes; in that case the persister exposes them as `nil` and any
   # `lazy_find` / `find_or_build` call would raise `NoMethodError`.
   def collection_registered?(name)
-    !persister.send(name).nil?
+    persister.respond_to?(name) && !persister.send(name).nil?
   end
 end
