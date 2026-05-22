@@ -1,12 +1,32 @@
 require 'active_support/inflector'
 require 'util/miq-exception'
 require 'parallel'
+require 'concurrent'
 
 module OpenstackHandle
   class Handle
     attr_accessor :username, :password, :address, :port, :api_version, :security_protocol, :connection_options
     attr_reader :project_name
     attr_writer   :default_tenant_name
+
+    # Class-level Keystone token cache shared across every Handle instance
+    # living in the same process. Survives EMS reloads from the DB
+    # between refresh tasks, so the same worker authenticates once per
+    # tenant per token lifetime instead of once per task.
+    #
+    # Key   : "username@address:port||tenant_name"
+    # Value : {@link CachedToken}
+    # Concurrency: `Concurrent::Map#compute` makes the read-or-write
+    # critical section atomic per-key, preventing thundering-herd on
+    # Keystone when several threads miss the same tenant at once.
+    TENANT_TOKEN_CACHE = Concurrent::Map.new
+
+    # Safety margin (seconds) subtracted from the real Keystone token
+    # expiry before considering an entry stale. With the default 3600s
+    # Keystone token, this triggers re-auth roughly every 55 minutes.
+    TOKEN_EXPIRY_MARGIN = 60
+
+    CachedToken = Struct.new(:token_str, :catalog, :expires_at, :keyword_init => true)
 
     SERVICE_NAME_MAP = {
       "Compute"       => :nova,
@@ -148,7 +168,55 @@ module OpenstackHandle
       "http://#{address}/dashboard"
     end
 
+    # Public entry point for obtaining a Fog OpenStack service handle.
+    #
+    # Two execution paths exist:
+    #
+    # * **token-cache path** (default): authenticate once per tenant via
+    #   {TENANT_TOKEN_CACHE}, then build every Fog service for that
+    #   tenant by passing the cached `auth_token` + `management_url` so
+    #   Fog skips its internal `POST /v3/auth/tokens`.
+    # * **legacy path**: enabled by setting
+    #   `Settings.ems_refresh.openstack.auth_token_cache_enabled = false`.
+    #   Falls back to the original implementation kept in
+    #   {#connect_without_cache}, useful as an emergency rollback.
+    #
+    # Signature and return value are unchanged. The wrapping in the
+    # per-service Delegate class is preserved across both paths.
     def connect(options = {})
+      return connect_without_cache(options) unless token_cache_enabled?
+
+      opts    = options.dup
+      service = (opts.delete(:service) || "Compute").to_s.camelize
+      tenant  = opts.delete(:tenant_name)
+      discover_tenants = opts.fetch(:discover_tenants, true)
+      opts.delete(:discover_tenants)
+      opts.delete(:auth_type)
+
+      if discover_tenants && tenant.blank?
+        tenant = default_tenant_name
+      end
+
+      raw_service = with_auth_retry(tenant) do
+        cached = fetch_or_build_tenant_token(tenant, opts)
+
+        management_url = endpoint_url_from_catalog(cached.catalog, service, opts)
+
+        fog_opts = base_fog_opts(opts).merge(
+          :openstack_auth_token     => cached.token_str,
+          :openstack_management_url => management_url
+        )
+
+        self.class.raw_connect_with_token(service, fog_opts, security_protocol)
+      end
+
+      wrap_in_service_delegate(raw_service, service)
+    end
+
+    # Original `connect` implementation, retained verbatim as a rollback
+    # path behind the `auth_token_cache_enabled` feature flag. Do not
+    # edit unless you are also editing the cached path above.
+    def connect_without_cache(options = {})
       opts     = options.dup
       service  = (opts.delete(:service) || "Compute").to_s.camelize
       tenant   = opts.delete(:tenant_name)
@@ -182,14 +250,32 @@ module OpenstackHandle
         raw_service = self.class.raw_connect_try_ssl(username, password, address, port, service, opts,
                                                      security_protocol)
 
-        service_wrapper_name = "#{service}Delegate"
-        # Allow openstack to define new services without explicitly requiring a
-        # service wrapper.
-        if OpenstackHandle.const_defined?(service_wrapper_name)
-          OpenstackHandle.const_get(service_wrapper_name).new(raw_service, self, SERVICE_NAME_MAP[service])
-        else
-          raw_service
-        end
+        wrap_in_service_delegate(raw_service, service)
+      end
+    end
+
+    # Invalidate one or more cached tenant tokens. Useful from console
+    # after rotating EMS credentials, or programmatically when a 401 is
+    # observed before the recorded expiry.
+    #
+    # Filters compose by AND. With no filters the whole cache is wiped.
+    #
+    # @example invalidate everything
+    #   OpenstackHandle::Handle.invalidate_tenant_token
+    # @example invalidate every tenant of a given EMS host
+    #   OpenstackHandle::Handle.invalidate_tenant_token(:address => "10.0.0.1")
+    def self.invalidate_tenant_token(address: nil, username: nil, tenant: nil)
+      if address.nil? && username.nil? && tenant.nil?
+        TENANT_TOKEN_CACHE.clear
+        return
+      end
+
+      TENANT_TOKEN_CACHE.delete_if do |key, _|
+        id_part, t = key.split("||", 2)
+        user_host = id_part || ""
+        (address.nil?  || user_host.end_with?("@#{address}")) &&
+          (username.nil? || user_host.start_with?("#{username}@")) &&
+          (tenant.nil?   || t == tenant)
       end
     end
 
@@ -423,6 +509,204 @@ module OpenstackHandle
         results.uniq! { |item| item.kind_of?(Hash) ? item[unique_id] : item.send(unique_id) }
       end
       results
+    end
+
+    private
+
+    # Wraps a freshly built Fog service into the matching Delegate class
+    # so the rest of the codebase keeps using the same wrapper API
+    # regardless of the connect path that produced it.
+    def wrap_in_service_delegate(raw_service, service)
+      service_wrapper_name = "#{service}Delegate"
+      if OpenstackHandle.const_defined?(service_wrapper_name)
+        OpenstackHandle.const_get(service_wrapper_name).new(raw_service, self, SERVICE_NAME_MAP[service])
+      else
+        raw_service
+      end
+    end
+
+    # Feature flag gate. Defaults to enabled; flip to false to fall back
+    # to the legacy auth-per-service flow without redeploying code.
+    def token_cache_enabled?
+      ::Settings.ems_refresh.openstack.try(:auth_token_cache_enabled) != false
+    rescue StandardError
+      true
+    end
+
+    # Atomic per-key lookup-or-build on {TENANT_TOKEN_CACHE}. When two
+    # threads race on the same tenant, only one runs `build_tenant_token`
+    # and the others receive its result, avoiding parallel Keystone hits
+    # on the same project.
+    def fetch_or_build_tenant_token(tenant, opts)
+      key = tenant_cache_key(tenant)
+      TENANT_TOKEN_CACHE.compute(key) do |current|
+        if current && tenant_token_valid?(current)
+          current
+        else
+          build_tenant_token(tenant, opts)
+        end
+      end
+    end
+
+    # Runs the only Keystone POST in the cached path. Failures propagate
+    # to the caller (and crucially do NOT poison the cache, since
+    # `compute` writes only the block's return value — an exception
+    # leaves the previous entry, if any, untouched).
+    def build_tenant_token(tenant, _opts)
+      auth_opts = keystone_auth_opts(tenant)
+      conn_opts = (connection_options || {}).merge(excon_options).merge(ssl_options)
+
+      token = Fog::OpenStack::Auth::Token.build(auth_opts, conn_opts)
+
+      CachedToken.new(
+        :token_str  => token.token,
+        :catalog    => token.catalog,
+        :expires_at => Time.parse(token.expires).utc
+      )
+    rescue => err
+      $fog_log.error("TenantTokenCache: authentication failed tenant=#{tenant} address=#{address}: #{err.class}: #{err.message}")
+      raise
+    end
+
+    def tenant_token_valid?(entry)
+      return false unless entry.expires_at.is_a?(Time)
+      Time.now.utc < (entry.expires_at - TOKEN_EXPIRY_MARGIN)
+    end
+
+    def tenant_cache_key(tenant)
+      "#{username}@#{address}:#{port}||#{tenant}"
+    end
+
+    # Options consumed by `Fog::OpenStack::Auth::Token.build` — mirrors
+    # the identity/scope subset that `raw_connect` used to pass when
+    # delegating auth to each Fog service.
+    def keystone_auth_opts(tenant)
+      scheme   = security_protocol.to_s =~ /ssl/i ? "https" : "http"
+      auth_url = self.class.auth_url(address, port, scheme)
+
+      opts = {
+        :openstack_auth_url => auth_url,
+        :openstack_username => username,
+        :openstack_api_key  => password,
+      }
+
+      if api_version == 'v2'
+        opts[:openstack_tenant]               = tenant if tenant
+        opts[:openstack_identity_api_version] = 'v2.0'
+      else
+        opts[:openstack_project_name]      = tenant if tenant
+        opts[:openstack_project_domain_id] = domain_id
+        opts[:openstack_user_domain_id]    = domain_id
+      end
+
+      opts
+    end
+
+    # Options used when instantiating the Fog service object itself.
+    # Credentials are intentionally absent: the cached `auth_token` and
+    # `management_url` (added by the caller) make Fog skip its own auth.
+    def base_fog_opts(opts)
+      {
+        :openstack_auth_url      => self.class.auth_url(address, port),
+        :openstack_region        => region,
+        :openstack_endpoint_type => 'publicURL',
+        :connection_options      => (connection_options || {}).merge(excon_options),
+        :ssl_options             => ssl_options,
+      }.merge(opts.slice(:openstack_service_type))
+    end
+
+    # Resolve the management URL for a service against the cached
+    # catalog. A nil return is a safe signal: Fog falls back to its
+    # normal auth flow for that single service instead of crashing.
+    def endpoint_url_from_catalog(catalog, service, opts)
+      return nil if catalog.nil? || catalog.payload.empty?
+
+      service_type  = fog_service_type(service, opts)
+      catalog.get_endpoint_url(service_type, 'public', region)
+    rescue Fog::OpenStack::Auth::Catalog::ServiceTypeError,
+           Fog::OpenStack::Auth::Catalog::EndpointError => err
+      $fog_log.warn("TenantTokenCache: catalog lookup failed service=#{service} region=#{region}: #{err.class} #{err.message}")
+      nil
+    rescue => err
+      $fog_log.error("TenantTokenCache: unexpected catalog lookup error service=#{service}: #{err.class} #{err.message}")
+      nil
+    end
+
+    # Map ManageIQ service names to the OpenStack `service_type` values
+    # actually published in the Keystone catalog. Multi-valued entries
+    # cover historical aliases (e.g. Cinder v3 vs the older `volume`).
+    def fog_service_type(service, opts)
+      return opts[:openstack_service_type] if opts[:openstack_service_type]
+
+      {
+        "Compute"       => ["compute"],
+        "Network"       => ["network"],
+        "Image"         => ["image"],
+        "Volume"        => ["volumev3", "block-storage", "volumev2", "volume"],
+        "Storage"       => ["object-store", "swift"],
+        "Metering"      => ["metering", "cloudmetering"],
+        "Identity"      => ["identity"],
+        "Orchestration" => ["orchestration"],
+        "Baremetal"     => ["baremetal"],
+        "Introspection" => ["baremetal-introspection"],
+        "Workflow"      => ["workflowv2"],
+        "Metric"        => ["metric"],
+        "Event"         => ["event", "panko"],
+        "NFV"           => ["nfv-orchestration"],
+      }.fetch(service, [service.downcase])
+    end
+
+    # Single-shot retry around a Fog call that may surface a stale token
+    # (revoked early on Keystone). On 401 the tenant entry is purged and
+    # the block is run again, so the next attempt re-authenticates.
+    def with_auth_retry(tenant)
+      attempts = 0
+      begin
+        attempts += 1
+        yield
+      rescue Excon::Errors::Unauthorized => err
+        raise if attempts > 1
+
+        $fog_log.warn("TenantTokenCache: 401 on tenant=#{tenant}, invalidating and retrying once: #{err.class}: #{err.message}")
+        self.class.invalidate_tenant_token(:address => address, :username => username, :tenant => tenant)
+        retry
+      end
+    end
+
+    public
+
+    # Variant of {raw_connect_try_ssl} that uses a pre-fetched token
+    # instead of credentials. Skips the SSL fallback because the scheme
+    # has already been resolved during `build_tenant_token`.
+    def self.raw_connect_with_token(service, opts, security_protocol)
+      try_connection(security_protocol) do |_scheme, ssl_connection_options|
+        merged_opts = opts.dup
+        merged_opts[:connection_options] = (merged_opts[:connection_options] || {}).merge(ssl_connection_options)
+        raw_connect_direct(service, merged_opts)
+      end
+    end
+
+    # Tail half of the legacy {raw_connect}, extracted so the
+    # token-cache path can reuse it without re-running the credential
+    # handling that is no longer relevant when a token is already known.
+    def self.raw_connect_direct(service, opts)
+      opts[:openstack_service_type] = ["nfv-orchestration"] if service == "NFV"
+      opts[:openstack_service_type] = ["workflowv2"]        if service == "Workflow"
+
+      if service == "Planning"
+        Fog::OpenStack::Planning.new(opts)
+      elsif service == "Workflow"
+        Fog::OpenStack::Workflow.new(opts)
+      elsif service == "Metric"
+        Fog::OpenStack::Metric.new(opts)
+      elsif service == "Event"
+        Fog::OpenStack::Event.new(opts)
+      else
+        Fog::OpenStack.const_get(service).new(opts)
+      end
+    rescue Fog::OpenStack::Auth::Catalog::ServiceTypeError, Fog::Service::NotFound
+      $fog_log.warn("MIQ(#{self.class.name}##{__method__}) Service #{service} not available for openstack provider #{opts[:openstack_auth_url]}")
+      raise MiqException::ServiceNotAvailable
     end
   end
 end
