@@ -73,7 +73,6 @@ class ManageIQ::Providers::Openstack::Inventory::Parser::NetworkManager < Manage
   def floating_ips
     return unless collection_registered?(:floating_ips)
 
-    ports_registered = collection_registered?(:network_ports)
     collector.floating_ips.each do |f|
       floating_ip = persister.floating_ips.find_or_build(f.id)
       floating_ip.address = f.floating_ip_address
@@ -81,7 +80,7 @@ class ManageIQ::Providers::Openstack::Inventory::Parser::NetworkManager < Manage
       floating_ip.status = f.attributes["status"]
       floating_ip.cloud_tenant = persister.cloud_tenants.lazy_find(f.tenant_id)
       floating_ip.cloud_network = persister.cloud_networks.lazy_find(f.floating_network_id)
-      next unless ports_registered
+      next unless collection_registered?(:network_ports)
 
       floating_ip.network_port = persister.network_ports.lazy_find(f.port_id)
       floating_ip.vm = persister.network_ports.lazy_find(f.port_id, :key => :device)
