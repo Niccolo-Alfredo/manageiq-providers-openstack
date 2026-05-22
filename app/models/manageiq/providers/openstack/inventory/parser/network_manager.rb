@@ -61,7 +61,19 @@ class ManageIQ::Providers::Openstack::Inventory::Parser::NetworkManager < Manage
     end
   end
 
+  # Parses Neutron floating IPs into the inventory collection.
+  #
+  # The `network_port` / `vm` associations are linked through the
+  # `network_ports` inventory collection, which is registered only when
+  # the symmetric gate in the persister allows it (see
+  # `Persister::Definitions::NetworkCollections#register_network_ports?`).
+  # When the collection is not registered we skip those two assignments
+  # rather than calling `lazy_find` on a nil collection, which would
+  # raise `NoMethodError: undefined method 'lazy_find' for nil`.
   def floating_ips
+    return unless collection_registered?(:floating_ips)
+
+    ports_registered = collection_registered?(:network_ports)
     collector.floating_ips.each do |f|
       floating_ip = persister.floating_ips.find_or_build(f.id)
       floating_ip.address = f.floating_ip_address
@@ -69,12 +81,20 @@ class ManageIQ::Providers::Openstack::Inventory::Parser::NetworkManager < Manage
       floating_ip.status = f.attributes["status"]
       floating_ip.cloud_tenant = persister.cloud_tenants.lazy_find(f.tenant_id)
       floating_ip.cloud_network = persister.cloud_networks.lazy_find(f.floating_network_id)
+      next unless ports_registered
+
       floating_ip.network_port = persister.network_ports.lazy_find(f.port_id)
       floating_ip.vm = persister.network_ports.lazy_find(f.port_id, :key => :device)
     end
   end
 
+  # Parses Neutron ports into the inventory collection. Skipped entirely
+  # when the symmetric persister gate disabled the `network_ports`
+  # collection (e.g. a VM/Volume-only targeted refresh).
   def network_ports
+    return unless collection_registered?(:network_ports)
+
+    sgs_registered = collection_registered?(:security_groups)
     collector.network_ports.each do |np|
       mac_address = np.mac_address
 
@@ -95,10 +115,11 @@ class ManageIQ::Providers::Openstack::Inventory::Parser::NetworkManager < Manage
       network_port.extra_dhcp_opts = np.attributes["extra_dhcp_opts"]
       network_port.allowed_address_pairs = np.attributes["allowed_address_pairs"]
 
-      security_groups = np.security_groups.map do |sg|
-        persister.security_groups.lazy_find(sg)
+      if sgs_registered
+        network_port.security_groups = np.security_groups.map do |sg|
+          persister.security_groups.lazy_find(sg)
+        end
       end
-      network_port.security_groups = security_groups
 
       np.fixed_ips.each do |address|
         persister.cloud_subnet_network_ports.find_or_build_by(
@@ -126,7 +147,12 @@ class ManageIQ::Providers::Openstack::Inventory::Parser::NetworkManager < Manage
     end
   end
 
+  # Parses Neutron security groups. Skipped when the symmetric persister
+  # gate disabled the collection — calling `find_or_build` on a nil
+  # collection would crash the refresh.
   def security_groups
+    return unless collection_registered?(:security_groups)
+
     collector.security_groups.each do |s|
       security_group = persister.security_groups.find_or_build(s.id)
       security_group.name = s.name
@@ -169,7 +195,12 @@ class ManageIQ::Providers::Openstack::Inventory::Parser::NetworkManager < Manage
     firewall_rule.source_ip_range = rule.ip_range["cidr"]
   end
 
+  # Parses Neutron firewall rules. Requires both the `firewall_rules` and
+  # `security_groups` collections to be registered, since each rule is
+  # attached to a security group via `find_or_build`.
   def firewall_rules
+    return unless collection_registered?(:firewall_rules) && collection_registered?(:security_groups)
+
     collector.firewall_rules.each do |s|
       firewall_rule_neutron(s, persister.security_groups.find_or_build(s.security_group_id))
     end
@@ -191,5 +222,15 @@ class ManageIQ::Providers::Openstack::Inventory::Parser::NetworkManager < Manage
     end
     # Returning nil for non VM port, we don't want to store those as ports
     nil
+  end
+
+  # Returns true when the persister has the given inventory collection
+  # registered. The symmetric registration gates in
+  # `Persister::Definitions::NetworkCollections` may skip
+  # `network_ports`, `security_groups` and `firewall_rules` on targeted
+  # refreshes; in that case the persister exposes them as `nil` and any
+  # `lazy_find` / `find_or_build` call would raise `NoMethodError`.
+  def collection_registered?(name)
+    !persister.send(name).nil?
   end
 end
