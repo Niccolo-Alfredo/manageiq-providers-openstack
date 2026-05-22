@@ -88,9 +88,11 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
 
     # security_groups: collector fetches by explicit SG refs, or tenant-wide
     # when the refresh is tenant-triggered. For VM/Volume/Stack-only
-    # triggers neither condition holds and the collection must stay
-    # un-registered to prevent the tenant-scoped arel from archiving the
-    # whole tenant.
+    # triggers neither condition holds and we still need the collection
+    # registered so other collections (network_ports, firewall_rules) can
+    # `lazy_find` security groups. In that lookup-only mode the collection
+    # is registered with `:complete => false` and no `targeted_arel`, so no
+    # archival happens and `lazy_find` falls back to the existing DB row.
     if register_security_groups?
       add_network_collection(:security_groups) do |builder|
         builder.add_properties(:parent_inventory_collections => %i[cloud_tenants])
@@ -114,6 +116,23 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
         # we just get an event that one of them changed
         builder.add_properties(:targeted => false) if references(:security_groups).present?
       end
+    elsif lookup_security_groups?
+      add_network_collection(:security_groups) do |builder|
+        # Lookup-only: no targeted_arel and complete=false so no archival
+        # can happen. `lazy_find(ems_ref)` resolves to the existing DB row.
+        builder.add_properties(:complete => false)
+      end
+    end
+
+    # Lookup-only registration for network_ports when another collection
+    # (e.g. floating_ips on a standalone `floatingip.update.end` event) needs
+    # to `lazy_find` a port without triggering a tenant-wide port scan or
+    # archival. Skipped when `register_network_ports?` already produced the
+    # full archive-enabled collection above.
+    if !register_network_ports? && lookup_network_ports?
+      add_network_collection(:network_ports) do |builder|
+        builder.add_properties(:complete => false)
+      end
     end
   end
 
@@ -126,6 +145,18 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
     references(:security_groups).present? || tenant_scope_active?
   end
 
+  # Other collections (network_ports, firewall_rules) need to resolve
+  # security groups via `lazy_find` even when the refresh has no SG refs
+  # nor a tenant scope (e.g. a `port.update` event that changes the SG
+  # binding). In that case the SG collection is registered for lookup
+  # only — no archival, no tenant-scoped arel — so `lazy_find(ems_ref)`
+  # falls back to the existing DB row.
+  def lookup_security_groups?
+    references(:network_ports).present? ||
+      references(:network_routers).present? ||
+      references(:firewall_rules).present?
+  end
+
   # Match the collector branches in
   # `Collector::TargetCollection#network_ports`: explicit port/router refs
   # OR tenant-triggered.
@@ -133,6 +164,16 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
     references(:network_ports).present? ||
       references(:network_routers).present? ||
       tenant_scope_active?
+  end
+
+  # Other collections (floating_ips) need to resolve network_ports via
+  # `lazy_find` even when the refresh has no port/router refs nor tenant
+  # scope (e.g. a `floatingip.update.end` event that re-binds a FIP to a
+  # different port). In that case the network_ports collection is
+  # registered for lookup only — no archival, no tenant-scoped arel.
+  def lookup_network_ports?
+    references(:floating_ips).present? ||
+      references(:floating_ips_by_address).present?
   end
 
   # Match the collector branches in

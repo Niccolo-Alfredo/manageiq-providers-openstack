@@ -20,19 +20,27 @@ module ManageIQ::Providers::Openstack::CloudManager::Vm::ManageSecurityGroups
     end
   end
 
+  # Attach a security group to this VM via Nova, then queue a targeted
+  # refresh so the VM<->SG association is reconciled in MIQ regardless of
+  # whether the Ceilometer/Panko event reaches us.
   def raw_add_security_group(security_group)
     ext_management_system.with_provider_connection(compute_connection_options) do |connection|
       connection.add_security_group(ems_ref, security_group)
     end
+    EmsRefresh.queue_refresh(self)
   rescue => err
     _log.error "vm=[#{name}], security_group=[#{security_group}], error: #{err}"
     raise MiqException::MiqOpenstackApiRequestError, parse_error_message_from_fog_response(err), err.backtrace
   end
 
+  # Detach a security group from this VM via Nova, then queue a targeted
+  # refresh so the VM<->SG association is reconciled in MIQ regardless of
+  # whether the Ceilometer/Panko event reaches us.
   def raw_remove_security_group(security_group)
     ext_management_system.with_provider_connection(compute_connection_options) do |connection|
       connection.remove_security_group(ems_ref, security_group)
     end
+    EmsRefresh.queue_refresh(self)
   rescue => err
     _log.error "vm=[#{name}], security_group=[#{security_group}], error: #{err}"
     raise MiqException::MiqOpenstackApiRequestError, parse_error_message_from_fog_response(err), err.backtrace
