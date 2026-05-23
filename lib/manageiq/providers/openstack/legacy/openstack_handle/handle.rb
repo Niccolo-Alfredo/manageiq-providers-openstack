@@ -26,7 +26,7 @@ module OpenstackHandle
     # Keystone token, this triggers re-auth roughly every 55 minutes.
     TOKEN_EXPIRY_MARGIN = 60
 
-    CachedToken = Struct.new(:token_str, :catalog, :expires_at, :keyword_init => true)
+    CachedToken = Struct.new(:token_str, :catalog, :expires_at, keyword_init: true)
 
     SERVICE_NAME_MAP = {
       "Compute"       => :nova,
@@ -527,25 +527,30 @@ module OpenstackHandle
 
     # Feature flag gate. Defaults to enabled; flip to false to fall back
     # to the legacy auth-per-service flow without redeploying code.
-    def token_cache_enabled?
-      ::Settings.ems_refresh.openstack.try(:auth_token_cache_enabled) != false
-    rescue StandardError
-      true
-    end
+    def build_tenant_token(tenant, _opts)
+      auth_opts = keystone_auth_opts(tenant)
 
-    # Atomic per-key lookup-or-build on {TENANT_TOKEN_CACHE}. When two
-    # threads race on the same tenant, only one runs `build_tenant_token`
-    # and the others receive its result, avoiding parallel Keystone hits
-    # on the same project.
-    def fetch_or_build_tenant_token(tenant, opts)
-      key = tenant_cache_key(tenant)
-      TENANT_TOKEN_CACHE.compute(key) do |current|
-        if current && tenant_token_valid?(current)
-          current
-        else
-          build_tenant_token(tenant, opts)
-        end
+      # Ricava le ssl connection options con la stessa logica di try_connection,
+      # che gestisce ssl-no-validation → ssl_verify_peer: false
+      ssl_conn_opts = {}
+      self.class.try_connection(security_protocol, ssl_options) do |_scheme, connection_options|
+        ssl_conn_opts = connection_options
       end
+
+      conn_opts = (connection_options || {})
+                  .merge(excon_options)
+                  .merge(ssl_conn_opts)  # ← contiene ssl_verify_peer: false per ssl-no-validation
+
+      token = Fog::OpenStack::Auth::Token.build(auth_opts, conn_opts)
+
+      CachedToken.new(
+        :token_str  => token.token,
+        :catalog    => token.catalog,
+        :expires_at => Time.parse(token.expires).utc
+      )
+    rescue => err
+      $fog_log.error("TenantTokenCache: authentication failed tenant=#{tenant} address=#{address}: #{err.class}: #{err.message}")
+      raise
     end
 
     # Runs the only Keystone POST in the cached path. Failures propagate
@@ -606,12 +611,18 @@ module OpenstackHandle
     # Credentials are intentionally absent: the cached `auth_token` and
     # `management_url` (added by the caller) make Fog skip its own auth.
     def base_fog_opts(opts)
+      # Le ssl_options (ca_file, cert_store) vengono mergiate dentro
+      # connection_options — non come chiave top-level :ssl_options che
+      # fog non riconosce nel path raw_connect_direct e causerebbe
+      # "Unrecognized arguments: ssl_options". ssl_verify_peer viene
+      # aggiunto separatamente da raw_connect_with_token via try_connection.
+      conn_opts = (connection_options || {}).merge(excon_options).merge(ssl_options)
+
       {
         :openstack_auth_url      => self.class.auth_url(address, port),
         :openstack_region        => region,
         :openstack_endpoint_type => 'publicURL',
-        :connection_options      => (connection_options || {}).merge(excon_options),
-        :ssl_options             => ssl_options,
+        :connection_options      => conn_opts,
       }.merge(opts.slice(:openstack_service_type))
     end
 
@@ -621,11 +632,26 @@ module OpenstackHandle
     def endpoint_url_from_catalog(catalog, service, opts)
       return nil if catalog.nil? || catalog.payload.empty?
 
-      service_type  = fog_service_type(service, opts)
-      catalog.get_endpoint_url(service_type, 'public', region)
-    rescue Fog::OpenStack::Auth::Catalog::ServiceTypeError,
-           Fog::OpenStack::Auth::Catalog::EndpointError => err
-      $fog_log.warn("TenantTokenCache: catalog lookup failed service=#{service} region=#{region}: #{err.class} #{err.message}")
+      # Itera i service type uno alla volta in ordine di priorità, fermandosi
+      # al primo match. Necessario perché alcuni ambienti pubblicano alias
+      # multipli nello stesso catalog (es. volumev3 + block-storage per Cinder):
+      # passarli tutti insieme a get_endpoint_url causerebbe EndpointError
+      # "Multiple endpoints found". Questo rispecchia il comportamento del
+      # dispatcher Fog::OpenStack::Volume.new che prova V3 → V2 → V1.
+      service_types = Array(opts[:openstack_service_type].presence || fog_service_type(service, opts))
+      endpoint_type = 'public'
+
+      service_types.each do |type|
+        begin
+          url = catalog.get_endpoint_url([type], endpoint_type, region)
+          return url if url
+        rescue Fog::OpenStack::Auth::Catalog::ServiceTypeError,
+              Fog::OpenStack::Auth::Catalog::EndpointError
+          next
+        end
+      end
+
+      $fog_log.warn("TenantTokenCache: no endpoint found service=#{service} region=#{region} tried=#{service_types.inspect}")
       nil
     rescue => err
       $fog_log.error("TenantTokenCache: unexpected catalog lookup error service=#{service}: #{err.class} #{err.message}")
