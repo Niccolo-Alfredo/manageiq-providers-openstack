@@ -525,32 +525,25 @@ module OpenstackHandle
       end
     end
 
-    # Feature flag gate. Defaults to enabled; flip to false to fall back
-    # to the legacy auth-per-service flow without redeploying code.
-    def build_tenant_token(tenant, _opts)
-      auth_opts = keystone_auth_opts(tenant)
+    # Feature flag gate. Defaults to true; flip to false in Settings to
+    # fall back to the legacy auth-per-service flow without redeploying.
+    def token_cache_enabled?
+      ::Settings.dig(:ems_refresh, :openstack, :auth_token_cache_enabled) != false
+    end
 
-      # Ricava le ssl connection options con la stessa logica di try_connection,
-      # che gestisce ssl-no-validation → ssl_verify_peer: false
-      ssl_conn_opts = {}
-      self.class.try_connection(security_protocol, ssl_options) do |_scheme, connection_options|
-        ssl_conn_opts = connection_options
+    # Reads a valid token from TENANT_TOKEN_CACHE, or builds a fresh one.
+    # Failures propagate to the caller and do NOT poison the cache:
+    # Concurrent::Map#compute leaves any existing entry untouched when the
+    # block raises, so a transient Keystone error does not evict a valid token.
+    def fetch_or_build_tenant_token(tenant, opts)
+      key = tenant_cache_key(tenant)
+      TENANT_TOKEN_CACHE.compute(key) do |existing|
+        if existing && tenant_token_valid?(existing)
+          existing
+        else
+          build_tenant_token(tenant, opts)
+        end
       end
-
-      conn_opts = (connection_options || {})
-                  .merge(excon_options)
-                  .merge(ssl_conn_opts)  # ← contiene ssl_verify_peer: false per ssl-no-validation
-
-      token = Fog::OpenStack::Auth::Token.build(auth_opts, conn_opts)
-
-      CachedToken.new(
-        :token_str  => token.token,
-        :catalog    => token.catalog,
-        :expires_at => Time.parse(token.expires).utc
-      )
-    rescue => err
-      $fog_log.error("TenantTokenCache: authentication failed tenant=#{tenant} address=#{address}: #{err.class}: #{err.message}")
-      raise
     end
 
     # Runs the only Keystone POST in the cached path. Failures propagate
@@ -559,7 +552,17 @@ module OpenstackHandle
     # leaves the previous entry, if any, untouched).
     def build_tenant_token(tenant, _opts)
       auth_opts = keystone_auth_opts(tenant)
-      conn_opts = (connection_options || {}).merge(excon_options).merge(ssl_options)
+
+      # Derive ssl_verify_peer via try_connection so ssl-no-validation
+      # correctly sets ssl_verify_peer: false, matching the legacy path.
+      ssl_conn_opts = {}
+      self.class.try_connection(security_protocol, ssl_options) do |_scheme, connection_options|
+        ssl_conn_opts = connection_options
+      end
+
+      conn_opts = (connection_options || {})
+                  .merge(excon_options)
+                  .merge(ssl_conn_opts)
 
       token = Fog::OpenStack::Auth::Token.build(auth_opts, conn_opts)
 
