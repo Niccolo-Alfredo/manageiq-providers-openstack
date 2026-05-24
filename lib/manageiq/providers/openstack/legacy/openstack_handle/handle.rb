@@ -667,7 +667,7 @@ module OpenstackHandle
         end
       end
 
-      $fog_log.warn("TenantTokenCache: no endpoint found service=#{service} region=#{region} tried=#{service_types.inspect}")
+      $fog_log.debug("TenantTokenCache: no endpoint found service=#{service} region=#{region} tried=#{service_types.inspect}")
       nil
     rescue => err
       $fog_log.error("TenantTokenCache: unexpected catalog lookup error service=#{service}: #{err.class} #{err.message}")
