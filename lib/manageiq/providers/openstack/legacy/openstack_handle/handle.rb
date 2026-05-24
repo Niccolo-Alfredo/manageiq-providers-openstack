@@ -205,6 +205,14 @@ module OpenstackHandle
           :openstack_management_url => management_url
         )
 
+        if api_version == 'v2'
+          fog_opts[:openstack_tenant] = tenant if tenant
+        else
+          fog_opts[:openstack_project_name]      = @project_name = tenant if tenant
+          fog_opts[:openstack_project_domain_id] = domain_id
+          fog_opts[:openstack_user_domain_id]    = domain_id
+        end
+
         self.class.raw_connect_with_token(service, fog_opts, security_protocol)
       end
 
