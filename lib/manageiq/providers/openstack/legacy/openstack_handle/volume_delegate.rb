@@ -32,7 +32,7 @@ module OpenstackHandle
 
     def quotas_for_current_tenant
       if current_tenant.kind_of?(Hash)
-        @tenant_id ||= current_tenant['id']
+        @tenant_id ||= current_tenant['id'] || current_tenant[:id]
       else
         # Seems like keystone v3 has string in current_tenant
         @tenant_id ||= @os_handle.tenants.detect { |x| x.name == current_tenant }&.id
