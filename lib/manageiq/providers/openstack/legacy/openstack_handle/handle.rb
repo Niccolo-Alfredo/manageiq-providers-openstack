@@ -582,7 +582,7 @@ module OpenstackHandle
         :token_str  => token.token,
         :catalog    => token.catalog,
         :expires_at => Time.parse(token.expires).utc,
-        :tenant     => token.tenant
+        :tenant     => token.tenant&.transform_keys(&:to_s)
       )
     rescue => err
       $fog_log.error("TenantTokenCache: authentication failed tenant=#{tenant} address=#{address}: #{err.class}: #{err.message}")
