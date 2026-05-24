@@ -17,6 +17,10 @@ File principale: `lib/manageiq/providers/openstack/legacy/openstack_handle/handl
 | `d4c0802e` | fix: correct Concurrent::Map iteration and auth retry scope |
 | `b81bfc6b` | fix: pass project context to fog service in cached connect path |
 | `dc5a2257` | fix: pass current_tenant from cached token to fog service opts |
+| `755810dd` | fix: guard nil tenant_id in quota delegates and raise ServiceNotAvailable for missing catalog endpoints |
+| `df85b773` | fix: normalize cached tenant hash keys to strings |
+
+**Stato attuale (2026-05-24)**: full refresh funziona senza errori bloccanti, quote compute/network/volume raccolte correttamente. Da deployare su tutti e tre i nodi del cluster.
 
 ---
 
@@ -135,6 +139,12 @@ Valore : CachedToken {
 | `delete_if` su `Concurrent::Map` | `Concurrent::Map` non implementa `delete_if` (è di Hash) | `each_pair` + raccolta chiavi + `delete` | `d4c0802e` |
 | Retry su 401 da `build_tenant_token` | `with_auth_retry` catturava anche 401 Keystone dell'auth iniziale, causando retry inutile + crash | Spostato `fetch_or_build_tenant_token` fuori dal `rescue` scope in `with_auth_retry` | `d4c0802e` |
 | `NoMethodError: undefined method 'id' for nil` in `compute_delegate.rb:22` | Fog non setta `@current_tenant` quando salta il POST (path cached). Legge `options[:current_tenant]`, non `openstack_project_name`. `detect` ritornava nil. | Aggiunto campo `tenant` in `CachedToken` (il Hash v3 da Keystone), passato come `:current_tenant` in fog_opts | `dc5a2257` |
+| 404 su `quotas_for_current_tenant` (Compute e Volume) | Con `@tenant_id = nil`, `get_quota(nil)` produceva path `/os-quota-sets/` (nil interpolato come `""`) → 404. Nel branch `else`: `.id` su nil da `detect` → NoMethodError. | `&.id` safe navigation + `return nil unless @tenant_id` (pattern già in `network_delegate`) | `755810dd` |
+| `EOFError` su servizi non in catalog (es. NFV) | `endpoint_url_from_catalog` ritornava nil → `management_url: nil` → fog tentava connessione → EOFError | `raise MiqException::ServiceNotAvailable unless management_url` in `connect()` — stesso comportamento del path legacy | `755810dd` |
+| **Quote compute/network/volume non raccolte** (regressione) | `Fog::JSON.decode` sul sistema deployato symbolizza i nomi JSON → `token.tenant` ha chiavi simbolo (`:id`, `:name`). I delegate leggono `current_tenant['id']` con chiave stringa → nil → `@tenant_id` nil → `return nil unless @tenant_id` → quota saltata silenziosamente. Il path originale funzionava per accident (`get_quota(nil)` → Nova/Cinder rispondevano con quota del progetto dal token scope). | `token.tenant&.transform_keys(&:to_s)` in `build_tenant_token` normalizza le chiavi prima del caching | `df85b773` |
+
+### Note sui 401 residui nei log
+I tenant inaccessibili (Pippo, staging, service, aaaatarget_niko\*) generano 401 in log perché `service_for_each_accessible_tenant` itera su TUTTI i tenant visibili a Keystone (non solo quelli accessibili) e tenta `detect_service` per ogni service type. Con N service types e M tenant inaccessibili → N×M messaggi per refresh. Non sono bug: `detect_service` li cattura silenziosamente e ritorna nil. Spariscono dopo che un full refresh allinea il DB ManageIQ con lo stato reale di OpenStack (rimuove i tenant orfani).
 
 ---
 
@@ -201,3 +211,4 @@ OpenstackHandle::Handle.invalidate_tenant_token(address: "10.94.0.100")
 - `Fog::OpenStack::Core#initialize` (core.rb:203): `@current_tenant = options[:current_tenant]` — letto **prima** di `authenticate()`
 - `Fog::OpenStack::Core#authenticate` (core.rb:236): quando `openstack_management_url` è già settato, salta il POST e NON aggiorna `@current_tenant`
 - `token.tenant` per v3 (auth/token/v3.rb:67): `@data['token']['project']` — Hash con `id`, `name`, `domain`
+- **Chiavi simbolo**: sul sistema deployato `Fog::JSON.decode` usa `symbolize_names`, quindi `token.tenant` ha chiavi `:id`, `:name`, `:domain`. `build_tenant_token` chiama `transform_keys(&:to_s)` prima di cachare per garantire accesso con chiave stringa nei delegate.
