@@ -26,7 +26,7 @@ module OpenstackHandle
     # Keystone token, this triggers re-auth roughly every 55 minutes.
     TOKEN_EXPIRY_MARGIN = 60
 
-    CachedToken = Struct.new(:token_str, :catalog, :expires_at, keyword_init: true)
+    CachedToken = Struct.new(:token_str, :catalog, :expires_at, :tenant, keyword_init: true)
 
     SERVICE_NAME_MAP = {
       "Compute"       => :nova,
@@ -202,7 +202,8 @@ module OpenstackHandle
 
         fog_opts = base_fog_opts(opts).merge(
           :openstack_auth_token     => cached.token_str,
-          :openstack_management_url => management_url
+          :openstack_management_url => management_url,
+          :current_tenant           => cached.tenant
         )
 
         if api_version == 'v2'
@@ -579,7 +580,8 @@ module OpenstackHandle
       CachedToken.new(
         :token_str  => token.token,
         :catalog    => token.catalog,
-        :expires_at => Time.parse(token.expires).utc
+        :expires_at => Time.parse(token.expires).utc,
+        :tenant     => token.tenant
       )
     rescue => err
       $fog_log.error("TenantTokenCache: authentication failed tenant=#{tenant} address=#{address}: #{err.class}: #{err.message}")
