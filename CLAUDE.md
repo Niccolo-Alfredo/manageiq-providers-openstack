@@ -19,8 +19,10 @@ File principale: `lib/manageiq/providers/openstack/legacy/openstack_handle/handl
 | `dc5a2257` | fix: pass current_tenant from cached token to fog service opts |
 | `755810dd` | fix: guard nil tenant_id in quota delegates and raise ServiceNotAvailable for missing catalog endpoints |
 | `df85b773` | fix: normalize cached tenant hash keys to strings |
+| `7b9ca054` | fix: accept both string and symbol keys in quota delegate tenant lookup |
+| `42b71919` | fix: demote missing-endpoint catalog log from warn to debug |
 
-**Stato attuale (2026-05-24)**: full refresh funziona senza errori bloccanti, quote compute/network/volume raccolte correttamente. Da deployare su tutti e tre i nodi del cluster.
+**Stato attuale (2026-05-24)**: patch stabile e verificata su tutti e tre i nodi del cluster. Full refresh completo senza errori bloccanti. Quote compute/network/volume raccolte correttamente. Log operativi puliti.
 
 ---
 
@@ -142,9 +144,17 @@ Valore : CachedToken {
 | 404 su `quotas_for_current_tenant` (Compute e Volume) | Con `@tenant_id = nil`, `get_quota(nil)` produceva path `/os-quota-sets/` (nil interpolato come `""`) → 404. Nel branch `else`: `.id` su nil da `detect` → NoMethodError. | `&.id` safe navigation + `return nil unless @tenant_id` (pattern già in `network_delegate`) | `755810dd` |
 | `EOFError` su servizi non in catalog (es. NFV) | `endpoint_url_from_catalog` ritornava nil → `management_url: nil` → fog tentava connessione → EOFError | `raise MiqException::ServiceNotAvailable unless management_url` in `connect()` — stesso comportamento del path legacy | `755810dd` |
 | **Quote compute/network/volume non raccolte** (regressione) | `Fog::JSON.decode` sul sistema deployato symbolizza i nomi JSON → `token.tenant` ha chiavi simbolo (`:id`, `:name`). I delegate leggono `current_tenant['id']` con chiave stringa → nil → `@tenant_id` nil → `return nil unless @tenant_id` → quota saltata silenziosamente. Il path originale funzionava per accident (`get_quota(nil)` → Nova/Cinder rispondevano con quota del progetto dal token scope). | `token.tenant&.transform_keys(&:to_s)` in `build_tenant_token` normalizza le chiavi prima del caching | `df85b773` |
+| **Quote ancora nil dopo df85b773** (stale cache) | Il fix `transform_keys` si applica solo ai token nuovi. I worker in esecuzione avevano in cache entry con chiavi simbolo valide per ~55 min e le restituivano as-is senza passare per `build_tenant_token`. Riavviare il processo avrebbe svuotato la cache ma era indesiderato. | `current_tenant['id'] \|\| current_tenant[:id]` nei tre delegate: robusto a entrambi i tipi senza richiedere restart | `7b9ca054` |
+| **WARN NFV/Storage ad ogni refresh** | `endpoint_url_from_catalog` loggava WARN per servizi non presenti nel catalog (NFV/Tacker, Swift non deployati). Log rumorosi per operatori. | `$fog_log.warn` → `$fog_log.debug` in `endpoint_url_from_catalog` | `42b71919` |
 
 ### Note sui 401 residui nei log
-I tenant inaccessibili (Pippo, staging, service, aaaatarget_niko\*) generano 401 in log perché `service_for_each_accessible_tenant` itera su TUTTI i tenant visibili a Keystone (non solo quelli accessibili) e tenta `detect_service` per ogni service type. Con N service types e M tenant inaccessibili → N×M messaggi per refresh. Non sono bug: `detect_service` li cattura silenziosamente e ritorna nil. Spariscono dopo che un full refresh allinea il DB ManageIQ con lo stato reale di OpenStack (rimuove i tenant orfani).
+I tenant inaccessibili generano 401 perché `service_for_each_accessible_tenant` itera su TUTTI i tenant visibili a Keystone e tenta `detect_service` per ogni service type. Non sono bug: `detect_service` li cattura e ritorna nil. Risoluzione: aggiungere `miqstagmilano` come membro dei tenant inaccessibili in OpenStack (es. tenant `service` — è il tenant OpenStack interno per i servizi di sistema; dopo averlo fatto i 401 sono scomparsi).
+
+### Stato log operativi post-patch
+Log puliti al termine del ciclo di fix. Per ogni full refresh rimangono solo:
+- 401 per tenant genuinamente inaccessibili (nessuno con utente correttamente configurato)
+- Nessun WARN per NFV/Storage (abbassati a debug in `42b71919`)
+- Nessun WARN per quote saltate (risolto in `7b9ca054`)
 
 ---
 
