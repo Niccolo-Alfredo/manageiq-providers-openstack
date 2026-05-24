@@ -199,6 +199,7 @@ module OpenstackHandle
 
       raw_service = with_auth_retry(tenant, opts) do |cached|
         management_url = endpoint_url_from_catalog(cached.catalog, service, opts)
+        raise MiqException::ServiceNotAvailable unless management_url
 
         fog_opts = base_fog_opts(opts).merge(
           :openstack_auth_token     => cached.token_str,
