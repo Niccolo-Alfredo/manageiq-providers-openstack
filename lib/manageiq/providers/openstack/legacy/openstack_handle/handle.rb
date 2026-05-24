@@ -197,9 +197,7 @@ module OpenstackHandle
         tenant = default_tenant_name
       end
 
-      raw_service = with_auth_retry(tenant) do
-        cached = fetch_or_build_tenant_token(tenant, opts)
-
+      raw_service = with_auth_retry(tenant, opts) do |cached|
         management_url = endpoint_url_from_catalog(cached.catalog, service, opts)
 
         fog_opts = base_fog_opts(opts).merge(
@@ -270,13 +268,17 @@ module OpenstackHandle
         return
       end
 
-      TENANT_TOKEN_CACHE.delete_if do |key, _|
+      keys_to_delete = []
+      TENANT_TOKEN_CACHE.each_pair do |key, _|
         id_part, t = key.split("||", 2)
         user_host = id_part || ""
-        (address.nil?  || user_host.end_with?("@#{address}")) &&
-          (username.nil? || user_host.start_with?("#{username}@")) &&
-          (tenant.nil?   || t == tenant)
+        if (address.nil?  || user_host.end_with?("@#{address}")) &&
+           (username.nil? || user_host.start_with?("#{username}@")) &&
+           (tenant.nil?   || t == tenant)
+          keys_to_delete << key
+        end
       end
+      keys_to_delete.each { |k| TENANT_TOKEN_CACHE.delete(k) }
     end
 
     def baremetal_service(tenant_name = nil)
@@ -688,16 +690,18 @@ module OpenstackHandle
     # Single-shot retry around a Fog call that may surface a stale token
     # (revoked early on Keystone). On 401 the tenant entry is purged and
     # the block is run again, so the next attempt re-authenticates.
-    def with_auth_retry(tenant)
+    def with_auth_retry(tenant, opts)
+      cached = fetch_or_build_tenant_token(tenant, opts)
       attempts = 0
       begin
         attempts += 1
-        yield
+        yield cached
       rescue Excon::Errors::Unauthorized => err
         raise if attempts > 1
 
         $fog_log.warn("TenantTokenCache: 401 on tenant=#{tenant}, invalidating and retrying once: #{err.class}: #{err.message}")
         self.class.invalidate_tenant_token(:address => address, :username => username, :tenant => tenant)
+        cached = fetch_or_build_tenant_token(tenant, opts)
         retry
       end
     end
