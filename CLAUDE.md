@@ -21,8 +21,9 @@ File principale: `lib/manageiq/providers/openstack/legacy/openstack_handle/handl
 | `df85b773` | fix: normalize cached tenant hash keys to strings |
 | `7b9ca054` | fix: accept both string and symbol keys in quota delegate tenant lookup |
 | `42b71919` | fix: demote missing-endpoint catalog log from warn to debug |
+| `06dbfb92` | fix: invalidate cached token on 401 from API calls in accessor_for_accessible_tenants |
 
-**Stato attuale (2026-05-24)**: patch stabile e verificata su tutti e tre i nodi del cluster. Full refresh completo senza errori bloccanti. Quote compute/network/volume raccolte correttamente. Log operativi puliti.
+**Stato attuale (2026-05-25)**: patch stabile e verificata su tutti e tre i nodi del cluster. Full refresh completo senza errori bloccanti. Quote compute/network/volume raccolte correttamente. Log operativi puliti. Aggiunto fix per token revocati esternamente: 401 da API call ora invalida la cache e forza re-auth al refresh successivo.
 
 ---
 
@@ -146,6 +147,7 @@ Valore : CachedToken {
 | **Quote compute/network/volume non raccolte** (regressione) | `Fog::JSON.decode` sul sistema deployato symbolizza i nomi JSON → `token.tenant` ha chiavi simbolo (`:id`, `:name`). I delegate leggono `current_tenant['id']` con chiave stringa → nil → `@tenant_id` nil → `return nil unless @tenant_id` → quota saltata silenziosamente. Il path originale funzionava per accident (`get_quota(nil)` → Nova/Cinder rispondevano con quota del progetto dal token scope). | `token.tenant&.transform_keys(&:to_s)` in `build_tenant_token` normalizza le chiavi prima del caching | `df85b773` |
 | **Quote ancora nil dopo df85b773** (stale cache) | Il fix `transform_keys` si applica solo ai token nuovi. I worker in esecuzione avevano in cache entry con chiavi simbolo valide per ~55 min e le restituivano as-is senza passare per `build_tenant_token`. Riavviare il processo avrebbe svuotato la cache ma era indesiderato. | `current_tenant['id'] \|\| current_tenant[:id]` nei tre delegate: robusto a entrambi i tipi senza richiedere restart | `7b9ca054` |
 | **WARN NFV/Storage ad ogni refresh** | `endpoint_url_from_catalog` loggava WARN per servizi non presenti nel catalog (NFV/Tacker, Swift non deployati). Log rumorosi per operatori. | `$fog_log.warn` → `$fog_log.debug` in `endpoint_url_from_catalog` | `42b71919` |
+| **Token revocato esternamente non invalidava la cache** | Quando un token veniva revocato su Keystone prima della scadenza naturale, la 401 arrivava durante le API call successive (`svc.servers.to_a`), non durante `raw_connect_with_token`. `with_auth_retry` cattura solo il blocco di creazione fog: la 401 da API call propagava uncaught fuori dal thread `Parallel.each` e `TENANT_TOKEN_CACHE` manteneva il token revocato fino a `expires_at` — ogni refresh successivo riusava il token revocato e falliva nuovamente. | `rescue Excon::Errors::Unauthorized, Excon::Error::Unauthorized` in `accessor_for_accessible_tenants`: log WARN + `invalidate_tenant_token` + `nil`. Al refresh successivo il cache miss forza un nuovo POST `/v3/auth/tokens`. | `06dbfb92` |
 
 ### Note sui 401 residui nei log
 I tenant inaccessibili generano 401 perché `service_for_each_accessible_tenant` itera su TUTTI i tenant visibili a Keystone e tenta `detect_service` per ogni service type. Non sono bug: `detect_service` li cattura e ritorna nil. Risoluzione: aggiungere `miqstagmilano` come membro dei tenant inaccessibili in OpenStack (es. tenant `service` — è il tenant OpenStack interno per i servizi di sistema; dopo averlo fatto i 401 sono scomparsi).
@@ -165,7 +167,8 @@ Log puliti al termine del ciclo di fix. Per ogni full refresh rimangono solo:
 | Keystone irraggiungibile (SocketError) | `Excon::Errors::SocketError` → `MiqHostError` (transiente) | stesso: `build_tenant_token` re-raise → `MiqHostError` |
 | Timeout Keystone | `Excon::Errors::Timeout` → `MiqUnreachableError` | stesso |
 | Credenziali errate / tenant inaccessibile (401 auth) | `Excon::Errors::Unauthorized` → rescuato da `detect_service` → tenant skippato | stesso: 401 in `build_tenant_token` propaga direttamente a `detect_service` |
-| Token scaduto (401 mid-refresh) | non applicabile (auth fresca ogni call) | `with_auth_retry` invalida e riautentica |
+| Token scaduto (401 mid-refresh, durante `raw_connect_with_token`) | non applicabile (auth fresca ogni call) | `with_auth_retry` invalida e riautentica |
+| Token revocato esternamente (401 durante API call dopo `connect()`) | non applicabile | `accessor_for_accessible_tenants` rescua, invalida cache, ritorna nil → re-auth al refresh successivo |
 | Service non nel catalog | `Fog::Service::NotFound` → `ServiceNotAvailable` | `endpoint_url_from_catalog` ritorna nil → Fog salta auth e usa management_url nil |
 
 ---
