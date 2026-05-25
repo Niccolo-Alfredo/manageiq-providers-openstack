@@ -494,6 +494,11 @@ module OpenstackHandle
           $fog_log.warn("MIQ(#{self.class.name}.#{__method__}) timeout during OpenStack request. #{tcos_msg} Skipping inventory item #{service} #{accessor}")
           (ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_refresh_logger.warn(tcos_msg) rescue nil)
           nil
+        rescue Excon::Errors::Unauthorized, Excon::Error::Unauthorized => err
+          $fog_log.warn("MIQ(#{self.class.name}.#{__method__}) 401 Unauthorized during #{service} #{accessor} " \
+                        "for tenant #{project&.name} — token revoked mid-refresh. Invalidating cache. #{err.class}: #{err.message}")
+          self.class.invalidate_tenant_token(:address => address, :username => username, :tenant => project&.name)
+          nil
         rescue Excon::Error::Socket, Fog::Errors::Error => err
           info = OpenstackHandle::HandledList.tcos_endpoint_info(svc) rescue {}
           kv = info.map { |k, v| "#{k}=#{v}" }.join(' ')
