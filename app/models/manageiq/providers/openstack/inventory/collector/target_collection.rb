@@ -4,8 +4,19 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
   def initialize(_manager, _target)
     super
     @os_handle ||= manager.openstack_handle
-    @original_target_classes = (_target.respond_to?(:targets) ? _target.targets.to_a : []).map(&:class).to_set
-    @tenant_scope_active = @original_target_classes&.any? { |c| c <= CloudTenant } || false
+    # Detect a CloudTenant trigger BEFORE parse_targets!/infer mutate
+    # target.targets. The TargetCollection built by event_target_parser
+    # contains InventoryRefresh::Target instances (with an :association
+    # attribute), not AR records, so checking by class alone misses every
+    # event-driven tenant refresh - see commit 825da162.
+    original_targets = _target.respond_to?(:targets) ? _target.targets.to_a.dup : []
+    @tenant_scope_active = original_targets.any? do |t|
+      if t.kind_of?(InventoryRefresh::Target)
+        t.association == :cloud_tenants
+      else
+        t.kind_of?(CloudTenant)
+      end
+    end
     # Expose the flag on the target so the Persister can scope its
     # targeted_arel safely (avoid deleting tenant-wide records when the
     # refresh was triggered by a VM/Volume).
