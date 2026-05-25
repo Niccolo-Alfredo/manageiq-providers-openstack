@@ -226,14 +226,14 @@ class ManageIQ::Providers::Openstack::NetworkManager::CloudNetwork < ::CloudNetw
       :offText   => _('Down'),
     }
 
-    fields << {
-      :component => 'switch',
-      :id        => 'cloud_network_shared',
-      :name      => 'shared',
-      :label     => _('Shared'),
-      :onText    => _('Yes'),
-      :offText   => _('No'),
-    }
+    # fields << {
+    #   :component => 'switch',
+    #   :id        => 'cloud_network_shared',
+    #   :name      => 'shared',
+    #   :label     => _('Shared'),
+    #   :onText    => _('Yes'),
+    #   :offText   => _('No'),
+    # }
 
     {:fields => fields}
   end
@@ -449,14 +449,14 @@ class ManageIQ::Providers::Openstack::NetworkManager::CloudNetwork < ::CloudNetw
       :offText   => _('Down'),
     }
 
-    fields << {
-      :component => 'switch',
-      :id        => 'cloud_network_shared',
-      :name      => 'shared',
-      :label     => _('Shared'),
-      :onText    => _('Yes'),
-      :offText   => _('No'),
-    }
+    # fields << {
+    #   :component => 'switch',
+    #   :id        => 'cloud_network_shared',
+    #   :name      => 'shared',
+    #   :label     => _('Shared'),
+    #   :onText    => _('Yes'),
+    #   :offText   => _('No'),
+    # }
 
     {:fields => fields}
   end
