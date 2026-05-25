@@ -27,16 +27,26 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::CloudC
     add_cloud_collection(:networks)
 
     add_cloud_collection(:cloud_resource_quotas) do |builder|
+      persister_target = target
       builder.add_properties(:parent_inventory_collections => %i[cloud_tenants])
       builder.add_targeted_arel(
         lambda do |inventory_collection|
-          tenant_refs = inventory_collection.parent_inventory_collections
-                                            .collect(&:manager_uuids)
-                                            .map(&:to_a)
-                                            .flatten
-          inventory_collection.parent.cloud_resource_quotas
-                              .joins(:cloud_tenant)
-                              .where('cloud_tenants.ems_ref' => tenant_refs)
+          # Quotas are only collected when the refresh was triggered by a
+          # CloudTenant (see Collector#quotas). On VM/Volume-triggered
+          # refreshes the collector returns [], so scoping the delete to the
+          # tenant would wipe every quota of that tenant. Restrict the delete
+          # scope to nothing in that case.
+          if persister_target.try(:tenant_scope_active?)
+            tenant_refs = inventory_collection.parent_inventory_collections
+                                              .collect(&:manager_uuids)
+                                              .map(&:to_a)
+                                              .flatten
+            inventory_collection.parent.cloud_resource_quotas
+                                .joins(:cloud_tenant)
+                                .where('cloud_tenants.ems_ref' => tenant_refs)
+          else
+            inventory_collection.parent.cloud_resource_quotas.none
+          end
         end
       )
     end

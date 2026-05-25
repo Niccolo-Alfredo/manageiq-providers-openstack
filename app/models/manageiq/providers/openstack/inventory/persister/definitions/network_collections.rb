@@ -44,45 +44,64 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
     end
 
     add_network_collection(:network_ports) do |builder|
+      persister_target = target
       builder.add_properties(:delete_method => :disconnect_port)
       builder.add_properties(:parent_inventory_collections => %i[cloud_tenants])
       builder.add_targeted_arel(
         lambda do |inventory_collection|
-          tenant_refs = inventory_collection.parent_inventory_collections
-                                            .collect(&:manager_uuids)
-                                            .map(&:to_a)
-                                            .flatten
-          tenant_ids = inventory_collection.parent
-                                           .cloud_tenants
-                                           .where(:ems_ref => tenant_refs)
-                                           .pluck(:id)
-          inventory_collection.parent.network_ports
-                              .where(:cloud_tenant_id => tenant_ids)
+          # When the refresh was triggered by a CloudTenant, the collector
+          # fetched ALL ports of that tenant from Neutron, so we can safely
+          # scope the delete to the tenant. When the trigger is a VM/Volume,
+          # the collector only fetched the ports referenced by that VM, so we
+          # must restrict deletion to those explicit ems_refs - otherwise
+          # every other port of the tenant would be wiped.
+          if persister_target.try(:tenant_scope_active?)
+            tenant_refs = inventory_collection.parent_inventory_collections
+                                              .collect(&:manager_uuids)
+                                              .map(&:to_a)
+                                              .flatten
+            tenant_ids = inventory_collection.parent
+                                             .cloud_tenants
+                                             .where(:ems_ref => tenant_refs)
+                                             .pluck(:id)
+            inventory_collection.parent.network_ports
+                                .where(:cloud_tenant_id => tenant_ids)
+          else
+            port_refs = persister_target.try(:references, :network_ports) || []
+            inventory_collection.parent.network_ports
+                                .where(:ems_ref => port_refs)
+          end
         end
       )
     end
 
     add_network_collection(:security_groups) do |builder|
+      persister_target = target
       builder.add_properties(:parent_inventory_collections => %i[cloud_tenants])
       builder.add_targeted_arel(
         lambda do |inventory_collection|
-          tenant_refs = inventory_collection.parent_inventory_collections
-                                            .collect(&:manager_uuids)
-                                            .map(&:to_a)
-                                            .flatten
-          tenant_ids = inventory_collection.parent
-                                           .cloud_tenants
-                                           .where(:ems_ref => tenant_refs)
-                                           .pluck(:id)
-          inventory_collection.parent.security_groups
-                              .where(:cloud_tenant_id => tenant_ids)
+          # See network_ports above for the rationale: tenant-triggered
+          # refreshes can reconcile by tenant, VM/Volume-triggered refreshes
+          # must restrict delete scope to the SGs explicitly referenced to
+          # avoid wiping the rest of the tenant's security groups.
+          if persister_target.try(:tenant_scope_active?)
+            tenant_refs = inventory_collection.parent_inventory_collections
+                                              .collect(&:manager_uuids)
+                                              .map(&:to_a)
+                                              .flatten
+            tenant_ids = inventory_collection.parent
+                                             .cloud_tenants
+                                             .where(:ems_ref => tenant_refs)
+                                             .pluck(:id)
+            inventory_collection.parent.security_groups
+                                .where(:cloud_tenant_id => tenant_ids)
+          else
+            sg_refs = persister_target.try(:references, :security_groups) || []
+            inventory_collection.parent.security_groups
+                                .where(:ems_ref => sg_refs)
+          end
         end
       )
-      # targeted refresh workaround-- always refresh the whole security group collection
-      # regardless of whether this is a TargetCollection or not
-      # because OpenStack doesn't give us UUIDs of new or changed security groups,
-      # we just get an event that one of them changed
-      builder.add_properties(:targeted => false) if references(:security_groups).present?
     end
   end
 end

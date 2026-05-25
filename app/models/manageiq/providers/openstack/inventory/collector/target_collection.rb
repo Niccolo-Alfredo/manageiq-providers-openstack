@@ -5,6 +5,14 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
     super
     @os_handle ||= manager.openstack_handle
     @original_target_classes = (_target.respond_to?(:targets) ? _target.targets.to_a : []).map(&:class).to_set
+    @tenant_scope_active = @original_target_classes&.any? { |c| c <= CloudTenant } || false
+    # Expose the flag on the target so the Persister can scope its
+    # targeted_arel safely (avoid deleting tenant-wide records when the
+    # refresh was triggered by a VM/Volume).
+    if _target
+      _target.instance_variable_set(:@tenant_scope_active, @tenant_scope_active)
+      _target.define_singleton_method(:tenant_scope_active?) { @tenant_scope_active }
+    end
     tcos_time("target_collection.init", desc: "fase totale di setup del target refresh (parse + infer)", target_count: _target&.targets&.size) do
       tcos_time("parse_targets", desc: "classifica i target in arrivo (VM, tenant, stack, volume)") { parse_targets! }
       tcos_time("infer_related_ems_refs", desc: "espande i target con oggetti correlati da DB e API") { infer_related_ems_refs! }
@@ -20,8 +28,7 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
   # (added so persister.lazy_find can link to tenants), but we MUST NOT use
   # them as a scope for full neutron/cinder/nova tenant-wide collections.
   def tenant_scope_active?
-    return @tenant_scope_active unless @tenant_scope_active.nil?
-    @tenant_scope_active = @original_target_classes&.any? { |c| c <= CloudTenant } || false
+    @tenant_scope_active
   end
 
   def targets_by_association(association)
