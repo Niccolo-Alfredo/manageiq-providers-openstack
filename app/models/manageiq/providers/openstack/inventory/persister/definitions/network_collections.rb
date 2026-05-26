@@ -35,18 +35,28 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
     end
 
     add_network_collection(:firewall_rules) do |builder|
+      persister_target = target
       builder.add_properties(:manager_ref => %i[ems_ref])
       builder.add_properties(:parent_inventory_collections => %i[security_groups])
       builder.add_targeted_arel(
         lambda do |inventory_collection|
-          sg_refs = inventory_collection.parent_inventory_collections
-                                        .collect(&:manager_uuids)
-                                        .map(&:to_a)
-                                        .flatten
-          sg_ids = inventory_collection.parent
-                                       .security_groups
-                                       .where(:ems_ref => sg_refs)
-                                       .pluck(:id)
+          # Same rationale as cloud_subnet_network_ports above: scope from
+          # `target.references(...)` rather than the parent IC's
+          # `manager_uuids`, which would be empty when the lambda is
+          # evaluated before the security_groups IC is populated and would
+          # cause UniqueViolation on insert. Mirrors the two collector
+          # branches in `Collector::TargetCollection#firewall_rules`.
+          if persister_target.try(:tenant_scope_active?)
+            tenant_refs = persister_target.try(:references, :cloud_tenants) || []
+            tenant_ids  = inventory_collection.parent.cloud_tenants
+                                              .where(:ems_ref => tenant_refs).pluck(:id)
+            sg_ids = inventory_collection.parent.security_groups
+                                         .where(:cloud_tenant_id => tenant_ids).pluck(:id)
+          else
+            sg_refs = persister_target.try(:references, :security_groups) || []
+            sg_ids  = inventory_collection.parent.security_groups
+                                          .where(:ems_ref => sg_refs).pluck(:id)
+          end
           inventory_collection.parent.firewall_rules
                               .where(:resource_type => "SecurityGroup",
                                      :resource_id   => sg_ids)
@@ -66,15 +76,14 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
           # the collector only fetched the ports referenced by that VM, so we
           # must restrict deletion to those explicit ems_refs - otherwise
           # every other port of the tenant would be wiped.
+          # Tenant refs come from `target.references(:cloud_tenants)` rather
+          # than the parent IC's `manager_uuids` for the same reason as
+          # cloud_subnet_network_ports above (parent IC may be empty at
+          # lambda evaluation time).
           if persister_target.try(:tenant_scope_active?)
-            tenant_refs = inventory_collection.parent_inventory_collections
-                                              .collect(&:manager_uuids)
-                                              .map(&:to_a)
-                                              .flatten
-            tenant_ids = inventory_collection.parent
-                                             .cloud_tenants
-                                             .where(:ems_ref => tenant_refs)
-                                             .pluck(:id)
+            tenant_refs = persister_target.try(:references, :cloud_tenants) || []
+            tenant_ids  = inventory_collection.parent.cloud_tenants
+                                              .where(:ems_ref => tenant_refs).pluck(:id)
             inventory_collection.parent.network_ports
                                 .where(:cloud_tenant_id => tenant_ids)
           else
@@ -96,14 +105,9 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
           # must restrict delete scope to the SGs explicitly referenced to
           # avoid wiping the rest of the tenant's security groups.
           if persister_target.try(:tenant_scope_active?)
-            tenant_refs = inventory_collection.parent_inventory_collections
-                                              .collect(&:manager_uuids)
-                                              .map(&:to_a)
-                                              .flatten
-            tenant_ids = inventory_collection.parent
-                                             .cloud_tenants
-                                             .where(:ems_ref => tenant_refs)
-                                             .pluck(:id)
+            tenant_refs = persister_target.try(:references, :cloud_tenants) || []
+            tenant_ids  = inventory_collection.parent.cloud_tenants
+                                              .where(:ems_ref => tenant_refs).pluck(:id)
             inventory_collection.parent.security_groups
                                 .where(:cloud_tenant_id => tenant_ids)
           else
