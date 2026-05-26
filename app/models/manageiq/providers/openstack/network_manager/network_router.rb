@@ -100,19 +100,9 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
               :onText    => _('Yes'),
               :offText   => _('No'),
             },
-            {
-              :component    => 'switch',
-              :id           => 'external_gateway_info.enable_snat',
-              :name         => 'external_gateway_info.enable_snat',
-              :label        => _('Source NAT'),
-              :onText       => _('Yes'),
-              :offText      => _('No'),
-              :condition    => {
-                :when => 'enable',
-                :is   => true,
-              },
-              :initialValue => true,
-            },
+            # enable_snat rimosso dal form: la gestione del Source NAT è delegata
+            # al provider OpenStack che applica il valore di default.
+            # Comportamento allineato a Horizon (OpenStack Dashboard).
             {
               :component      => 'select',
               :id             => 'cloud_network_id',
@@ -189,7 +179,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
               :label        => _('Administrative State'),
               :onText       => _('Up'),
               :offText      => _('Down'),
-              :initialValue => true,
+              :initialValue => admin_state_up,
             },
           ]
         },
@@ -207,19 +197,9 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
               :onText    => _('Yes'),
               :offText   => _('No'),
             },
-            {
-              :component    => 'switch',
-              :id           => 'external_gateway_info.enable_snat',
-              :name         => 'external_gateway_info.enable_snat',
-              :label        => _('Source NAT'),
-              :onText       => _('Yes'),
-              :offText      => _('No'),
-              :condition    => {
-                :when => 'enable',
-                :is   => true,
-              },
-              :initialValue => true,
-            },
+            # enable_snat rimosso dal form: la gestione del Source NAT è delegata
+            # al provider OpenStack che applica il valore di default.
+            # Comportamento allineato a Horizon (OpenStack Dashboard).
             {
               :component      => 'select',
               :id             => 'cloud_network_id',
@@ -247,7 +227,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
   end
 
   def self.raw_create_network_router(ext_management_system, options)
-    cloud_tenant = options.delete(:cloud_tenant) # old non-react code
+    cloud_tenant = options.delete(:cloud_tenant)
     if (cloud_tenant_id = options.delete(:cloud_tenant_id))
       cloud_tenant = ext_management_system.cloud_tenants.find_by(:id => cloud_tenant_id)
     end
@@ -258,7 +238,6 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
     router = nil
 
     ext_management_system.with_provider_connection(connection_options(cloud_tenant)) do |service|
-      # Only pass OpenStack Neutron-compatible parameters
       payload = options.slice(:admin_state_up, :external_gateway_info)
       router = service.create_router(router_name, payload).body
     end
@@ -292,7 +271,7 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
   def self.options_to_refs!(cloud_tenant, options)
     if (cloud_network_id = options[:cloud_network_id]).present?
       gateway_options = {}
-      
+
       # Primary: look for VLAN networks (physical external/public networks in our infrastructure)
       begin
         network = CloudNetwork.find_by!(
@@ -301,10 +280,10 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
         )
       rescue ActiveRecord::RecordNotFound
         # Fallback: tenant-scoped private networks
-        _log.debug("VLAN network #{cloud_network_id} not found, searching in tenant ID: #{cloud_tenant.id} private networks")
+        _log.debug("VLAN network #{cloud_network_id} not found, searching in tenant #{cloud_tenant.id} private networks")
         network = cloud_tenant.cloud_networks.find(cloud_network_id)
       end
-      
+
       gateway_options[:network_id] = network.ems_ref
       if (cloud_subnet_ids = options.delete(:cloud_subnet_id)).present?
         gateway_options[:external_fixed_ips] =
@@ -314,9 +293,17 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
           end
       end
 
+      # enable_snat non viene impostato: la gestione del Source NAT è delegata
+      # al provider OpenStack che applica il valore di default.
+      # Il campo non è esposto nel form (comportamento allineato a Horizon).
       options[:external_gateway_info] = gateway_options
     else
-      options.delete(:external_gateway_info) # only has the enable_snat flag, but no cloud network
+      # Nessun network selezionato dalla UI: external_gateway_info viene impostato
+      # a nil in modo che fog lo serializzi come null nel body JSON.
+      # OpenStack interpreta null come rimozione del gateway esterno.
+      # Nota: richiede la patch a fog-openstack update_router (Bug 2: nil ignorato
+      # perché falsy — fix applicata direttamente alla gemma fog-openstack 1.1.5).
+      options[:external_gateway_info] = nil
     end
     options[:admin_state_up] ||= false
   end
@@ -341,7 +328,10 @@ class ManageIQ::Providers::Openstack::NetworkManager::NetworkRouter < ::NetworkR
   def raw_update_network_router(options)
     self.class.options_to_refs!(cloud_tenant, options)
     ext_management_system.with_provider_connection(connection_options(cloud_tenant)) do |service|
-      payload = options.slice(:admin_state_up, :external_gateway_info)
+      # Slice esplicito per passare a Neutron solo i campi supportati,
+      # evitando che parametri interni di ManageIQ (es. task_id, ems_id)
+      # vengano inviati nella richiesta e causino errori silenziosi.
+      payload = options.slice(:name, :admin_state_up, :external_gateway_info)
       service.update_router(ems_ref, payload)
     end
   rescue => e
