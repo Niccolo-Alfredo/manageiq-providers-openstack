@@ -8,17 +8,28 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
     add_network_collection(:network_routers)
 
     add_network_collection(:cloud_subnet_network_ports) do |builder|
+      persister_target = target
       builder.add_properties(:parent_inventory_collections => %i[vms network_ports])
       builder.add_targeted_arel(
         lambda do |inventory_collection|
-          np_refs = inventory_collection.parent_inventory_collections
-                                        .select { |c| c.name == :network_ports }
-                                        .flat_map { |c| c.manager_uuids.to_a }
-          np_ids = inventory_collection.parent.network_ports
-                                       .where(:ems_ref => np_refs)
-                                       .pluck(:id)
-          inventory_collection.parent.cloud_subnet_network_ports
-                              .where(:network_port_id => np_ids)
+          # Scope derived from `target.references(...)` instead of the parent
+          # IC's `manager_uuids`: the latter is empty when the framework
+          # evaluates the lambda before the parser has populated the
+          # network_ports IC, which makes the scope `1=0`, hides existing
+          # rows from the persister, and causes UniqueViolation on insert.
+          if persister_target.try(:tenant_scope_active?)
+            tenant_refs = persister_target.try(:references, :cloud_tenants) || []
+            tenant_ids  = inventory_collection.parent.cloud_tenants
+                                              .where(:ems_ref => tenant_refs).pluck(:id)
+            inventory_collection.parent.cloud_subnet_network_ports
+                                .joins(:network_port)
+                                .where(:network_ports => {:cloud_tenant_id => tenant_ids})
+          else
+            port_refs = persister_target.try(:references, :network_ports) || []
+            inventory_collection.parent.cloud_subnet_network_ports
+                                .joins(:network_port)
+                                .where(:network_ports => {:ems_ref => port_refs})
+          end
         end
       )
     end
