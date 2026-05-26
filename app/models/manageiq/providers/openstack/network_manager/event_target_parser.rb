@@ -38,14 +38,19 @@ class ManageIQ::Providers::Openstack::NetworkManager::EventTargetParser
                     :firewall_rules
                   end
 
-    if resource_id
-      add_target(target_collection, target_type, resource_id)
-    elsif target_type == :security_groups
-      add_target(target_collection, :security_groups, nil)
-    elsif target_type == :firewall_rules
-      add_target(target_collection, :firewall_rules, nil)
-    elsif target_type == :router_interfaces
+    # For security_groups / firewall_rules we deliberately do NOT add a
+    # narrow target ref. The collector already does a tenant-wide fetch
+    # (see Collector::TargetCollection#security_groups / #firewall_rules
+    # under tenant_scope_active?), and a narrow ref here would constrain
+    # the persister's manager_uuids to just the event's rule id, blocking
+    # the create/delete reconciliation of the other rules returned by
+    # Neutron in the same tenant. The :cloud_tenants ref added by
+    # collect_identity_tenant_references! is sufficient for both fetch
+    # and full tenant-scoped reconciliation.
+    if target_type == :router_interfaces
       collect_router_interface_targets!(target_collection)
+    elsif resource_id && !%i[security_groups firewall_rules].include?(target_type)
+      add_target(target_collection, target_type, resource_id)
     end
 
     $log.info("(Target Refresh) - MIQ(#{self.class.name}) Collected #{target_collection.targets.count} target(s) for #{ems_event.event_type}") if $log
