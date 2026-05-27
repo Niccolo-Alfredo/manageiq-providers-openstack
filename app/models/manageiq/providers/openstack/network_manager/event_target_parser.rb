@@ -72,14 +72,32 @@ class ManageIQ::Providers::Openstack::NetworkManager::EventTargetParser
   end
 
   def collect_identity_tenant_references!(target_collection)
-    tenant_id = event_payload['tenant_id'] || 
-                event_payload['project_id'] || 
+    tenant_id = event_payload['tenant_id'] ||
+                event_payload['project_id'] ||
                 event_payload.dig(resource_type, 'tenant_id') ||
                 event_payload.dig(resource_type, 'project_id') ||
                 event_payload.dig('initiator', 'project_id') ||
                 event_payload.dig('router_interface', 'tenant_id')
-    
-    add_target(target_collection, :cloud_tenants, tenant_id) if tenant_id
+
+    return unless tenant_id
+
+    # Prefer the CloudTenant AR record over a bare InventoryRefresh::Target
+    # ref. When the TargetCollection carries only refs the persister fails
+    # to reconcile CREATE/DELETE on tenant-scoped collections (e.g.
+    # firewall_rules, security_groups) - only UPDATEs of matching ems_refs
+    # land in the DB and new/stale rows stay frozen. With the AR record in
+    # `target.targets` the framework drives full tenant-scoped
+    # reconciliation as it does for sync `EmsRefresh.refresh(tenant)`.
+    network_manager = ems_event.ext_management_system
+    cloud_manager   = network_manager.respond_to?(:parent_manager) ? network_manager.parent_manager : nil
+    cloud_tenant    = cloud_manager&.cloud_tenants&.find_by(:ems_ref => tenant_id) ||
+                      network_manager.try(:cloud_tenants)&.find_by(:ems_ref => tenant_id)
+
+    if cloud_tenant
+      target_collection.targets << cloud_tenant
+    else
+      add_target(target_collection, :cloud_tenants, tenant_id)
+    end
   end
 
   def parsed_targets(target_collection = {})
