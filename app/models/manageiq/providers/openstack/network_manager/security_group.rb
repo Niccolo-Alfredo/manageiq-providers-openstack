@@ -284,6 +284,23 @@ class ManageIQ::Providers::Openstack::NetworkManager::SecurityGroup < ::Security
     raise MiqException::MiqSecurityGroupDeleteError, parse_error_message_from_neutron_response(e), e.backtrace
   end
 
+  def create_security_group_rule_queue(userid, security_group_id, direction, options = {})
+    task_opts = {
+      :action => "create Security Group rule for user #{userid}",
+      :userid => userid
+    }
+    queue_opts = {
+      :class_name  => self.class.name,
+      :method_name => 'raw_create_security_group_rule',
+      :instance_id => id,
+      :priority    => MiqQueue::HIGH_PRIORITY,
+      :role        => 'ems_operations',
+      :zone        => ext_management_system.my_zone,
+      :args        => [security_group_id, direction, options]
+    }
+    MiqTask.generic_action_with_callback(task_opts, queue_opts)
+  end
+
   def delete_security_group_queue(userid)
     task_opts = {
       :action => "deleting Security Group for user #{userid}",
@@ -301,27 +318,45 @@ class ManageIQ::Providers::Openstack::NetworkManager::SecurityGroup < ::Security
     MiqTask.generic_action_with_callback(task_opts, queue_opts)
   end
 
-  def raw_update_security_group(options)
-    _log.info "(test_firewall_rules): raw_update_security_group called with option keys: #{options.keys}"
-    firewall_rules = options.delete(:firewall_rules) || options.delete("firewall_rules")
+  def delete_security_group_rule_queue(userid, key)
+    task_opts = {
+      :action => "delete Security Group rule for user #{userid}",
+      :userid => userid
+    }
+    queue_opts = {
+      :class_name  => self.class.name,
+      :method_name => 'raw_delete_security_group_rule',
+      :instance_id => id,
+      :priority    => MiqQueue::HIGH_PRIORITY,
+      :role        => 'ems_operations',
+      :zone        => ext_management_system.my_zone,
+      :args        => [key]
+    }
+    MiqTask.generic_action_with_callback(task_opts, queue_opts)
+  end
 
-    if firewall_rules.nil?
-      _log.info "(test_firewall_rules): no firewall_rules key — skipping reconciliation"
-    elsif firewall_rules.empty?
-      _log.info "(test_firewall_rules): firewall_rules is empty array — all current rules will be deleted"
-    else
-      _log.info "(test_firewall_rules): firewall_rules present with #{firewall_rules.size} rule(s)"
-    end
-
+  def raw_create_security_group_rule(security_group_id, direction, options)
+    options.delete_if { |_k, v| v.nil? || v.empty? }
     ext_management_system.with_provider_connection(connection_options(cloud_tenant)) do |service|
-      unless options.empty?
-        _log.info "(test_firewall_rules): updating SG metadata"
-        service.update_security_group(ems_ref, options)
-      end
-      unless firewall_rules.nil?
-        _log.info "(test_firewall_rules): starting rule reconciliation with #{firewall_rules.size} desired rule(s)"
-        reconcile_firewall_rules(service, firewall_rules)
-      end
+      service.create_security_group_rule(security_group_id, parse_direction(direction), options)
+    end
+  rescue => e
+    _log.error "security_group=[#{name}], error: #{e}"
+    raise MiqException::MiqSecurityGroupCreateError, parse_error_message_from_neutron_response(e), e.backtrace
+  end
+
+  def raw_delete_security_group_rule(key)
+    ext_management_system.with_provider_connection(connection_options(cloud_tenant)) do |service|
+      service.delete_security_group_rule(key)
+    end
+  rescue => e
+    _log.error "security_group=[#{name}], error: #{e}"
+    raise MiqException::MiqSecurityGroupDeleteError, parse_error_message_from_neutron_response(e), e.backtrace
+  end
+
+  def raw_update_security_group(options)
+    ext_management_system.with_provider_connection(connection_options(cloud_tenant)) do |service|
+      service.update_security_group(ems_ref, options)
     end
   rescue => e
     _log.error "security_group=[#{name}], error: #{e}"
@@ -363,78 +398,5 @@ class ManageIQ::Providers::Openstack::NetworkManager::SecurityGroup < ::Security
 
   def connection_options(cloud_tenant = nil)
     self.class.connection_options(cloud_tenant)
-  end
-
-  # Reconcile live Neutron rules against the desired set submitted from the form.
-  # Deletes rules not present in desired_rules, then creates rules not already present.
-  # Never patches an existing rule in place.
-  # Called with an already-open provider service connection so all operations share
-  # the same connection context and execute synchronously in order.
-  def reconcile_firewall_rules(service, desired_rules)
-    current_rules      = service.get_security_group(ems_ref).body["security_group"]["security_group_rules"]
-    _log.info "(test_firewall_rules): fetched #{current_rules.size} current rule(s) from provider"
-
-    desired_normalized = desired_rules.map { |rule| normalize_desired_rule(rule) }
-    _log.info "(test_firewall_rules): normalized #{desired_normalized.size} desired rule(s)"
-
-    rules_to_delete = current_rules.reject { |cr| desired_normalized.any? { |dr| firewall_rule_matches?(cr, dr) } }
-    rules_to_add    = desired_normalized.reject { |dr| current_rules.any? { |cr| firewall_rule_matches?(cr, dr) } }
-    _log.info "(test_firewall_rules): rules to delete: #{rules_to_delete.size}"
-    _log.info "(test_firewall_rules): rules to add: #{rules_to_add.size}"
-
-    rules_to_delete.each do |rule|
-      _log.info "(test_firewall_rules): deleting rule id=#{rule["id"]}"
-      service.delete_security_group_rule(rule["id"])
-      _log.info "(test_firewall_rules): deleted rule id=#{rule["id"]}"
-    end
-
-    rules_to_add.each do |rule|
-      direction = rule[:direction]
-      params    = rule.reject { |k, _| k == :direction }
-      params.delete_if { |_k, v| v.to_s.empty? }
-      _log.info "(test_firewall_rules): creating rule direction=#{direction} protocol=#{rule[:protocol]} port=#{rule[:port_range_min]}-#{rule[:port_range_max]}"
-      service.create_security_group_rule(ems_ref, direction, params)
-      _log.info "(test_firewall_rules): created rule"
-    end
-
-    _log.info "(test_firewall_rules): reconciliation complete"
-  end
-
-  # Convert a form-submitted rule hash (string or symbol keys, ManageIQ field names)
-  # into the canonical Neutron-aligned format used for comparison and creation.
-  # All fields are normalized to lowercase strings so nil/"" compare equal.
-  def normalize_desired_rule(rule)
-    rule = rule.transform_keys(&:to_s)
-    _log.info "(test_firewall_rules): normalizing rule direction=#{rule["direction"].inspect}"
-
-    remote_group_id = nil
-    if rule["source_security_group_id"].present?
-      _log.info "(test_firewall_rules): resolving source_security_group_id=#{rule["source_security_group_id"]}"
-      begin
-        remote_group_id = SecurityGroup.find(rule["source_security_group_id"]).ems_ref
-      rescue ActiveRecord::RecordNotFound
-        _log.info "(test_firewall_rules): source_security_group_id=#{rule["source_security_group_id"]} not found — remote_group_id set to nil"
-        remote_group_id = nil
-      end
-    end
-
-    {
-      :direction        => parse_direction(rule["direction"].to_s),
-      :ethertype        => rule["network_protocol"].to_s.downcase,
-      :protocol         => rule["host_protocol"].to_s.downcase,
-      :port_range_min   => rule["port"].to_s,
-      :port_range_max   => rule["end_port"].to_s,
-      :remote_group_id  => remote_group_id.to_s,
-      :remote_ip_prefix => rule["source_ip_range"].to_s,
-    }
-  end
-
-  # Field-by-field equality check between a live Neutron rule (string keys, mixed types)
-  # and a normalized desired rule (symbol keys, all strings).
-  # Both sides are coerced to lowercase strings so nil, "", and absent keys all compare equal.
-  def firewall_rule_matches?(current_rule, desired_rule)
-    %w[direction ethertype protocol port_range_min port_range_max remote_group_id remote_ip_prefix].all? do |field|
-      current_rule[field].to_s.downcase == desired_rule[field.to_sym].to_s.downcase
-    end
   end
 end
