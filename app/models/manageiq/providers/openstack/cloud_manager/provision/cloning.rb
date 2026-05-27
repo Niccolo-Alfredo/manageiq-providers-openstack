@@ -1,6 +1,17 @@
 module ManageIQ::Providers::Openstack::CloudManager::Provision::Cloning
   def find_destination_in_vmdb(ems_ref)
-    super
+    found = super
+    if found
+      ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_event(
+        "provision.vm_visible_in_vmdb",
+        :ems_id => source.try(:ems_id),
+        :kind   => "provision",
+        :desc   => "VM finalmente presente nel DB MiQ dopo il refresh",
+        :vm_ems_ref => ems_ref,
+        :vm_id      => found.id
+      )
+    end
+    found
   rescue NoMethodError => ex
     # TODO: this should not be needed after we update refresh to not disconnect VmOrTemplate from EMS
     _log.debug("Unable to find Provison Source ExtmanagementSystem: #{ex}")
@@ -10,20 +21,38 @@ module ManageIQ::Providers::Openstack::CloudManager::Provision::Cloning
 
   def do_clone_task_check(clone_task_ref)
     connection_options = {:tenant_name => cloud_tenant.try(:name)}
-    source.with_provider_connection(connection_options) do |openstack|
-      instance = if connection_options
-                   openstack.servers.get(clone_task_ref)
-                 else
-                   openstack.handled_list(:servers).detect { |s| s.id == clone_task_ref }
-                 end
-      status   = instance.state.downcase.to_sym if instance.present?
+    ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_time(
+      "provision.do_clone_task_check",
+      :ems_id => source.try(:ems_id),
+      :kind   => "provision",
+      :desc   => "Nova: polling stato VM in fase di creazione",
+      :vm_ems_ref  => clone_task_ref,
+      :tenant_name => cloud_tenant.try(:name)
+    ) do
+      source.with_provider_connection(connection_options) do |openstack|
+        instance = if connection_options
+                     openstack.servers.get(clone_task_ref)
+                   else
+                     openstack.handled_list(:servers).detect { |s| s.id == clone_task_ref }
+                   end
+        status   = instance.state.downcase.to_sym if instance.present?
 
-      if status == :error
-        error_message = instance.fault["message"]
-        raise MiqException::MiqProvisionError, "An error occurred while provisioning Instance #{instance.name}: #{error_message}"
+        ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_event(
+          "provision.status_poll",
+          :ems_id => source.try(:ems_id),
+          :kind   => "provision",
+          :desc   => "stato corrente della VM dal polling Nova",
+          :vm_ems_ref => clone_task_ref,
+          :status     => status
+        )
+
+        if status == :error
+          error_message = instance.fault["message"]
+          raise MiqException::MiqProvisionError, "An error occurred while provisioning Instance #{instance.name}: #{error_message}"
+        end
+        return true if status == :active
+        return false, status
       end
-      return true if status == :active
-      return false, status
     end
   end
 
@@ -97,9 +126,28 @@ module ManageIQ::Providers::Openstack::CloudManager::Provision::Cloning
       end
     end
     
-    source.with_provider_connection(connection_options) do |openstack|
-      instance = openstack.servers.create(clone_options)
-      return instance.id
+    ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_time(
+      "provision.start_clone.nova_create_server",
+      :ems_id => source.try(:ems_id),
+      :kind   => "provision",
+      :desc   => "Nova: chiamata POST /servers per creare la VM",
+      :vm_name     => clone_options[:name],
+      :flavor_ref  => clone_options[:flavor_ref],
+      :image_ref   => clone_options[:image_ref],
+      :tenant_name => cloud_tenant.try(:name)
+    ) do
+      source.with_provider_connection(connection_options) do |openstack|
+        instance = openstack.servers.create(clone_options)
+        ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_event(
+          "provision.start_clone.created",
+          :ems_id => source.try(:ems_id),
+          :kind   => "provision",
+          :desc   => "Nova ha restituito l'id della nuova VM",
+          :vm_name    => clone_options[:name],
+          :vm_ems_ref => instance.id
+        )
+        return instance.id
+      end
     end
   rescue => e
     error_message = parse_error_message_from_fog_response(e)

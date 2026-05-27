@@ -13,28 +13,50 @@ class ManageIQ::Providers::Openstack::CloudManager::EventTargetParser
 
   def parse_ems_event_targets(ems_event)
     $log.info("(Target Refresh) - MIQ(#{self.class.name}) Processing event: #{ems_event.event_type}") if $log
-    
-    target_collection = InventoryRefresh::TargetCollection.new(:manager => ems_event.ext_management_system, :event => ems_event)
 
-    # there's almost always a tenant id regardless of event type
-    collect_identity_tenant_references!(target_collection)
+    ems_id     = ems_event.ext_management_system.try(:id)
+    event_type = ems_event.event_type
+    targets = ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_time(
+      "event_target_parser.parse",
+      :ems_id => ems_id,
+      :kind   => "event",
+      :desc   => "MiQ: traduce evento OpenStack in TargetCollection per refresh",
+      :event_type => event_type,
+      :ems_event_id => ems_event.id
+    ) do
+      target_collection = InventoryRefresh::TargetCollection.new(:manager => ems_event.ext_management_system, :event => ems_event)
 
-    if ems_event.event_type.start_with?("compute.instance")
-      collect_compute_instance_references!(target_collection)
-    elsif ems_event.event_type.start_with?("orchestration.stack")
-      collect_orchestration_stack_references!(target_collection)
-    elsif ems_event.event_type.start_with?("image.")
-      collect_image_references!(target_collection)
-    elsif ems_event.event_type.start_with?("aggregate.")
-      collect_host_aggregate_references!(target_collection)
-    elsif ems_event.event_type.start_with?("keypair")
-      collect_key_pair_references!(target_collection)
-    elsif ems_event.event_type.start_with?("identity.project.")
-      collect_identity_project_references!(target_collection)
+      # there's almost always a tenant id regardless of event type
+      collect_identity_tenant_references!(target_collection)
+
+      if event_type.start_with?("compute.instance")
+        collect_compute_instance_references!(target_collection)
+      elsif event_type.start_with?("orchestration.stack")
+        collect_orchestration_stack_references!(target_collection)
+      elsif event_type.start_with?("image.")
+        collect_image_references!(target_collection)
+      elsif event_type.start_with?("aggregate.")
+        collect_host_aggregate_references!(target_collection)
+      elsif event_type.start_with?("keypair")
+        collect_key_pair_references!(target_collection)
+      elsif event_type.start_with?("identity.project.")
+        collect_identity_project_references!(target_collection)
+      end
+
+      target_collection.targets
     end
 
-    $log.info("(Target Refresh) - MIQ(#{self.class.name}) Collected #{target_collection.targets.count} target(s) for #{ems_event.event_type}") if $log
-    target_collection.targets
+    ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_event(
+      "event_target_parser.built",
+      :ems_id => ems_id,
+      :kind   => "event",
+      :desc   => "TargetCollection generata dall'evento, pronta per il refresh",
+      :event_type   => event_type,
+      :target_count => targets.count
+    )
+
+    $log.info("(Target Refresh) - MIQ(#{self.class.name}) Collected #{targets.count} target(s) for #{event_type}") if $log
+    targets
   end
 
   def parsed_targets(target_collection = {})

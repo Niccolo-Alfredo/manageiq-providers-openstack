@@ -172,7 +172,7 @@ module OpenstackHandle
         opts[:openstack_user_domain_id]    = domain
       end
 
-      opts[:openstack_region] = region unless service == "Identity"
+      opts[:openstack_region] = region
 
       svc_cache = (@connection_cache[service] ||= {})
       svc_cache[tenant] ||= begin
@@ -390,13 +390,18 @@ module OpenstackHandle
                         "Skipping inventory item #{service} #{accessor}\n#{err}")
           nil
         rescue Excon::Error::Timeout, Fog::Errors::TimeoutError => err
-          $fog_log.warn("MIQ(#{self.class.name}.#{__method__}) timeout during OpenStack request. " \
-                        "Skipping inventory item #{service} #{accessor}\n#{err}")
+          info = OpenstackHandle::HandledList.tcos_endpoint_info(svc) rescue {}
+          kv = info.map { |k, v| "#{k}=#{v}" }.join(' ')
+          tcos_msg = "[TCOS-ENDPOINT] event=timeout service=#{service} accessor=#{accessor} project=#{project&.name} #{kv} err=#{err.class}: #{err.message}"
+          $fog_log.warn("MIQ(#{self.class.name}.#{__method__}) timeout during OpenStack request. #{tcos_msg} Skipping inventory item #{service} #{accessor}")
+          (ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_refresh_logger.warn(tcos_msg) rescue nil)
           nil
         rescue Excon::Error::Socket, Fog::Errors::Error => err
-          # Neutron probably not setup or failed
-          $fog_log.warn("MIQ(#{self.class.name}.#{__method__}) failed to connect during OpenStack request. " \
-                        "Skipping inventory item #{service} #{accessor}\n#{err}")
+          info = OpenstackHandle::HandledList.tcos_endpoint_info(svc) rescue {}
+          kv = info.map { |k, v| "#{k}=#{v}" }.join(' ')
+          tcos_msg = "[TCOS-ENDPOINT] event=socket service=#{service} accessor=#{accessor} project=#{project&.name} #{kv} err=#{err.class}: #{err.message}"
+          $fog_log.warn("MIQ(#{self.class.name}.#{__method__}) failed to connect during OpenStack request. #{tcos_msg} Skipping inventory item #{service} #{accessor}")
+          (ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_refresh_logger.warn(tcos_msg) rescue nil)
           nil
         end
 

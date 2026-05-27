@@ -101,6 +101,7 @@ class ManageIQ::Providers::Openstack::Inventory::Collector < ManageIQ::Providers
   end
 
   def orchestration_service
+    return nil if ::Settings.ems_refresh.openstack.try(:skip_orchestration)
     @orchestration_service ||= manager.openstack_handle.detect_orchestration_service
   end
 

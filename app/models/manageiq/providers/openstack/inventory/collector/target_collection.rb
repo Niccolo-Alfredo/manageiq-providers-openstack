@@ -4,11 +4,42 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
   def initialize(_manager, _target)
     super
     @os_handle ||= manager.openstack_handle
-    parse_targets!
-    infer_related_ems_refs!
-
+    # Detect a CloudTenant trigger BEFORE parse_targets!/infer mutate
+    # target.targets. The TargetCollection built by event_target_parser
+    # contains InventoryRefresh::Target instances (with an :association
+    # attribute), not AR records, so checking by class alone misses every
+    # event-driven tenant refresh - see commit 825da162.
+    original_targets = _target.respond_to?(:targets) ? _target.targets.to_a.dup : []
+    @tenant_scope_active = original_targets.any? do |t|
+      if t.kind_of?(InventoryRefresh::Target)
+        t.association == :cloud_tenants
+      else
+        t.kind_of?(CloudTenant)
+      end
+    end
+    # Expose the flag on the target so the Persister can scope its
+    # targeted_arel safely (avoid deleting tenant-wide records when the
+    # refresh was triggered by a VM/Volume).
+    if _target
+      _target.instance_variable_set(:@tenant_scope_active, @tenant_scope_active)
+      _target.define_singleton_method(:tenant_scope_active?) { @tenant_scope_active }
+    end
+    tcos_time("target_collection.init", desc: "fase totale di setup del target refresh (parse + infer)", target_count: _target&.targets&.size) do
+      tcos_time("parse_targets", desc: "classifica i target in arrivo (VM, tenant, stack, volume)") { parse_targets! }
+      tcos_time("infer_related_ems_refs", desc: "espande i target con oggetti correlati da DB e API") { infer_related_ems_refs! }
+      refs_summary = %i[vms cloud_tenants cloud_volumes orchestration_stacks network_ports network_routers security_groups cloud_networks floating_ips images flavors key_pairs].map { |k| "#{k}=#{references(k)&.size || 0}" }.join(' ')
+      ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_refresh_logger.info("[TCOS-REFRESH] ems=#{manager.id} kind=target target_collection.refs #{refs_summary} tenant_scope_active=#{tenant_scope_active?}")
+    end
     # Reset the target cache, so we can access new targets inside
     target.manager_refs_by_association_reset
+  end
+
+  # True only if the refresh was triggered by a CloudTenant target. When the
+  # trigger is a VM/Volume/Stack we may still have cloud_tenants references
+  # (added so persister.lazy_find can link to tenants), but we MUST NOT use
+  # them as a scope for full neutron/cinder/nova tenant-wide collections.
+  def tenant_scope_active?
+    @tenant_scope_active
   end
 
   def targets_by_association(association)
@@ -45,7 +76,7 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
     return [] unless network_service
     return [] if references(:cloud_subnets).blank? && references(:cloud_networks).blank? && references(:network_ports).blank?
     return @cloud_subnets if @cloud_subnets.any?
-    @cloud_subnets = network_service.handled_list(:subnets, {}, true)
+    @cloud_subnets = tcos_time("cloud_subnets.full_list", desc: "Neutron: lista completa di tutte le subnet") { network_service.handled_list(:subnets, {}, true) }
   end
 
   def network_ports
@@ -64,10 +95,17 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
       end.flatten
     end
 
-    # New: fetch all ports for targeted tenants
-    if references(:cloud_tenants).present?
-      references(:cloud_tenants).each do |tenant_id|
-        @network_ports += network_service.handled_list(:ports, {:tenant_id => tenant_id}, true)
+    # New: fetch all ports for targeted tenants - only when refresh was
+    # triggered by a CloudTenant. Volume/VM triggers add cloud_tenants
+    # references for lazy_find linking only and must not cause a tenant-wide
+    # neutron scan.
+    if tenant_scope_active? && references(:cloud_tenants).present?
+      tcos_time("network_ports.per_tenant_loop", desc: "Neutron: ciclo che recupera le porte di rete tenant per tenant", tenant_count: references(:cloud_tenants).size) do
+        references(:cloud_tenants).each do |tenant_id|
+          tcos_time("network_ports.fetch_one", desc: "Neutron: singola chiamata GET ports per un tenant", tenant_id: tenant_id) do
+            @network_ports += network_service.handled_list(:ports, {:tenant_id => tenant_id}, true)
+          end
+        end
       end
     end
 
@@ -89,15 +127,27 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
 
     @security_groups = []
 
-    # Existing: fetch all SGs when any SG event arrives
+    # Fetch only the specific SGs referenced (not the full list).
     if references(:security_groups).present?
-      @security_groups = network_service.handled_list(:security_groups, {}, openstack_network_admin?)
+      tcos_time("security_groups.fetch_by_ref_loop", desc: "Neutron: fetch puntuale dei security group referenziati", sg_count: references(:security_groups).size) do
+        references(:security_groups).each do |sg_id|
+          sg = tcos_time("security_groups.fetch_by_id", desc: "Neutron: GET singolo security_group per id", sg_id: sg_id) do
+            safe_get { network_service.security_groups.get(sg_id) }
+          end
+          @security_groups << sg if sg
+        end
+      end
     end
 
-    # New: fetch SGs for targeted tenants
-    if references(:cloud_tenants).present?
-      references(:cloud_tenants).each do |tenant_id|
-        @security_groups += network_service.handled_list(:security_groups, {:tenant_id => tenant_id}, true)
+    # Fetch SGs for targeted tenants - only when refresh was triggered by a
+    # CloudTenant. See tenant_scope_active? for rationale.
+    if tenant_scope_active? && references(:cloud_tenants).present?
+      tcos_time("security_groups.per_tenant_loop", desc: "Neutron: ciclo che recupera i security group tenant per tenant", tenant_count: references(:cloud_tenants).size) do
+        references(:cloud_tenants).each do |tenant_id|
+          tcos_time("security_groups.fetch_one", desc: "Neutron: singola chiamata GET security_groups per un tenant", tenant_id: tenant_id) do
+            @security_groups += network_service.handled_list(:security_groups, {:tenant_id => tenant_id}, true)
+          end
+        end
       end
     end
 
@@ -108,13 +158,24 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
     return [] unless network_service
     return @firewall_rules if @firewall_rules&.any?
 
-    if references(:firewall_rules).present? || references(:security_groups).present? || references(:cloud_tenants).present?
-      @firewall_rules = network_service.handled_list(:security_group_rules, {}, true)
-    else
-      @firewall_rules = []
+    @firewall_rules = []
+
+    # Preferred path: scope rule fetch to targeted tenants (avoids full list)
+    # Only when refresh was triggered by a CloudTenant.
+    if tenant_scope_active? && references(:cloud_tenants).present?
+      tcos_time("firewall_rules.per_tenant_loop", desc: "Neutron: ciclo che recupera le regole SG tenant per tenant", tenant_count: references(:cloud_tenants).size) do
+        references(:cloud_tenants).each do |tenant_id|
+          @firewall_rules += tcos_time("firewall_rules.fetch_one", desc: "Neutron: singola chiamata GET security_group_rules per un tenant", tenant_id: tenant_id) do
+            network_service.handled_list(:security_group_rules, {:tenant_id => tenant_id}, true)
+          end
+        end
+      end
+    # Fallback: explicit firewall_rules or security_groups refs without tenant scope
+    elsif references(:firewall_rules).present? || references(:security_groups).present?
+      @firewall_rules = tcos_time("firewall_rules.full_list", desc: "Neutron: lista completa di tutte le regole dei security group (fallback no-tenant)") { network_service.handled_list(:security_group_rules, {}, true) }
     end
 
-    @firewall_rules
+    @firewall_rules = @firewall_rules.compact.uniq { |r| r.respond_to?(:id) ? r.id : r['id'] }
   end
 
   def floating_ips
@@ -182,40 +243,49 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
 
   def tenants
     return [] if references(:cloud_tenants).blank?
-    @tenants = references(:cloud_tenants).collect do |cloud_tenant_id|
-      memoized_get_tenant(cloud_tenant_id)
-    end.compact
+    tcos_time("tenants.collect", desc: "risolve gli oggetti tenant a partire dagli id (usa cache visible_tenants)", tenant_count: references(:cloud_tenants).size) do
+      @tenants = references(:cloud_tenants).collect do |cloud_tenant_id|
+        memoized_get_tenant(cloud_tenant_id)
+      end.compact
+    end
   end
 
   def memoized_get_tenant(tenant_id)
     return nil if tenant_id.blank?
-    @tenant_memo ||= identity_service.visible_tenants.index_by(&:id)
+    @tenant_memo ||= tcos_time("tenants.visible_tenants_api", desc: "Keystone: lista completa dei tenant visibili (cache one-shot)") { identity_service.visible_tenants.index_by(&:id) }
     @tenant_memo[tenant_id]
   end
 
   def quotas
     return [] if references(:cloud_tenants).blank?
+    # Quota limits don't change on VM/Volume create/update events; only
+    # collect them when a tenant is the actual trigger of the refresh.
+    return [] unless tenant_scope_active?
 
     handle_tenants = @os_handle.tenants
     results = []
 
-    references(:cloud_tenants).each do |tenant_id|
-      tenant = handle_tenants.detect { |t| (t.respond_to?(:id) ? t.id : t['id']) == tenant_id }
-      unless tenant
-        $log.warn("Tenant not found for quota refresh: #{tenant_id}")
-        next
-      end
-
-      tenant_id_val = tenant.respond_to?(:id) ? tenant.id : tenant['id']
-      tenant_name = tenant.respond_to?(:name) ? tenant.name : tenant['name']
-      %w[Compute Volume Network].each do |service_name|
-        svc = @os_handle.detect_service(service_name, tenant_name)
-        unless svc
-          $log.warn("Service #{service_name} not available for tenant #{tenant_id_val} during quota refresh")
+    tcos_time("quotas.per_tenant_loop", desc: "ciclo che recupera quote Compute/Volume/Network per ogni tenant", tenant_count: references(:cloud_tenants).size) do
+      references(:cloud_tenants).each do |tenant_id|
+        tenant = handle_tenants.detect { |t| (t.respond_to?(:id) ? t.id : t['id']) == tenant_id }
+        unless tenant
+          $log.warn("Tenant not found for quota refresh: #{tenant_id}")
           next
         end
-        q = fetch_quota_for_service(svc, service_name, tenant_id_val)
-        results << q if q.is_a?(Hash)
+
+        tenant_id_val = tenant.respond_to?(:id) ? tenant.id : tenant['id']
+        tenant_name = tenant.respond_to?(:name) ? tenant.name : tenant['name']
+        tcos_time("quotas.fetch_tenant", desc: "recupera quote dei 3 servizi (Compute/Volume/Network) per un tenant", tenant_id: tenant_id_val) do
+          %w[Compute Volume Network].each do |service_name|
+            svc = tcos_time("quotas.detect_service", desc: "Keystone: scopre l'endpoint del servizio nel catalog per quel tenant", service: service_name, tenant_id: tenant_id_val) { @os_handle.detect_service(service_name, tenant_name) }
+            unless svc
+              $log.warn("Service #{service_name} not available for tenant #{tenant_id_val} during quota refresh")
+              next
+            end
+            q = tcos_time("quotas.fetch_one", desc: "chiamata GET quota verso il servizio per un tenant", service: service_name, tenant_id: tenant_id_val) { fetch_quota_for_service(svc, service_name, tenant_id_val) }
+            results << q if q.is_a?(Hash)
+          end
+        end
       end
     end
     results
@@ -412,21 +482,21 @@ class ManageIQ::Providers::Openstack::Inventory::Collector::TargetCollection < M
     # ems_refs of every related object. Now this is not very nice fro ma design point of view, but we really want
     # to see changes in VM's associated objects, so the VM view is always consistent and have fresh data.
     unless references(:vms).blank?
-      infer_related_vm_ems_refs_db!
-      infer_related_vm_ems_refs_api!
+      tcos_time("infer.vms.db", desc: "DB MiQ: trova oggetti correlati alle VM target (network, volumi, tenant, key pair)", count: references(:vms).size) { infer_related_vm_ems_refs_db! }
+      tcos_time("infer.vms.api", desc: "Nova: legge dettagli VM dall'API per estrarre image/flavor/network/SG correlati", count: references(:vms).size) { infer_related_vm_ems_refs_api! }
     end
     unless references(:orchestration_stacks).blank?
-      infer_related_orchestration_stacks_ems_refs_db!
-      infer_related_orchestration_stacks_ems_refs_api!
+      tcos_time("infer.stacks.db", desc: "DB MiQ: trova tenant e parent stack per gli stack target") { infer_related_orchestration_stacks_ems_refs_db! }
+      tcos_time("infer.stacks.api", desc: "Heat: scansiona risorse degli stack per VM e parent stack correlati") { infer_related_orchestration_stacks_ems_refs_api! }
     end
     unless references(:cloud_volumes).blank?
-      infer_related_cloud_volumes_ems_refs_db!
-      infer_related_cloud_volumes_ems_refs_api!
+      tcos_time("infer.volumes.db", desc: "DB MiQ: trova tenant e VM collegate ai volumi target") { infer_related_cloud_volumes_ems_refs_db! }
+      tcos_time("infer.volumes.api", desc: "Cinder: legge attachment dei volumi per estrarre VM correlate") { infer_related_cloud_volumes_ems_refs_api! }
     end
     unless references(:cloud_tenants).blank?
-      infer_related_cloud_tenant_ems_refs_db!
+      tcos_time("infer.tenants.db", desc: "DB MiQ: aggiunge i parent tenant ai target", count: references(:cloud_tenants).size) { infer_related_cloud_tenant_ems_refs_db! }
       # this hits the API and caches, so do this last
-      infer_related_cloud_tenant_ems_refs_api!
+      tcos_time("infer.tenants.api", desc: "Keystone: aggiunge i parent tenant leggendo dall'API (popola la cache)", count: references(:cloud_tenants).size) { infer_related_cloud_tenant_ems_refs_api! }
     end
   end
 

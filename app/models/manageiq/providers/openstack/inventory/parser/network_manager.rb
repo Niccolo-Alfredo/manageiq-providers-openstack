@@ -2,13 +2,15 @@ class ManageIQ::Providers::Openstack::Inventory::Parser::NetworkManager < Manage
   include ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods
 
   def parse
-    cloud_networks
-    cloud_subnets
-    floating_ips
-    network_ports
-    network_routers
-    security_groups
-    firewall_rules
+    tcos_time("parser.network_manager.parse", desc: "fase totale di parsing degli oggetti di rete Neutron") do
+      tcos_time("parser.network.cloud_networks", desc: "trasforma le reti Neutron in oggetti inventory") { cloud_networks }
+      tcos_time("parser.network.cloud_subnets", desc: "trasforma le subnet in oggetti inventory") { cloud_subnets }
+      tcos_time("parser.network.floating_ips", desc: "trasforma i floating IP in oggetti inventory") { floating_ips }
+      tcos_time("parser.network.network_ports", desc: "trasforma le porte di rete (e relativi IP) in oggetti inventory") { network_ports }
+      tcos_time("parser.network.network_routers", desc: "trasforma i router Neutron in oggetti inventory") { network_routers }
+      tcos_time("parser.network.security_groups", desc: "trasforma i security group in oggetti inventory") { security_groups }
+      tcos_time("parser.network.firewall_rules", desc: "trasforma le regole dei security group in oggetti inventory") { firewall_rules }
+    end
   end
 
   def cloud_networks

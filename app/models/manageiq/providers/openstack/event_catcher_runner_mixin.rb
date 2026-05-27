@@ -54,6 +54,42 @@ module ManageIQ::Providers::Openstack::EventCatcherRunnerMixin
   def queue_event(event)
     _log.info("#{log_prefix} Caught event [#{event.payload["event_type"]}]")
 
+    raw         = event.payload || {}
+    # OpenStack notifications wrap real content in oslo.message (JSON string).
+    # Unwrap it; fall back to the raw payload for non-oslo events.
+    content =
+      if raw.is_a?(Hash) && raw["oslo.message"]
+        begin
+          JSON.parse(raw["oslo.message"])
+        rescue JSON::ParserError
+          raw
+        end
+      else
+        raw
+      end
+    nested      = content["payload"].is_a?(Hash) ? content["payload"] : {}
+    event_type  = content["event_type"]
+    instance_id = content["instance_id"] || nested["instance_id"]
+    tenant_id   = content["tenant_id"]   || nested["tenant_id"] || content["_context_project_id"]
+    event_ts    = content["timestamp"]   || nested["timestamp"]  || content["_context_timestamp"]
+    lag_ms = nil
+    if event_ts
+      begin
+        lag_ms = ((Time.now.utc - Time.parse(event_ts.to_s).utc) * 1000).round(1)
+      rescue ArgumentError
+      end
+    end
+    ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods.tcos_event(
+      "event_catcher.queue_event",
+      :ems_id => @cfg && @cfg[:ems_id],
+      :kind   => "event",
+      :desc   => "AMQP: evento OpenStack ricevuto e accodato a MiqQueue",
+      :event_type => event_type,
+      :vm_ems_ref => instance_id,
+      :tenant_id  => tenant_id,
+      :lag_ms_from_nova => lag_ms
+    )
+
     event_hash = {}
     # copy content
     content = event.payload

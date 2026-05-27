@@ -2,21 +2,23 @@ class ManageIQ::Providers::Openstack::Inventory::Parser::CloudManager < ManageIQ
   include ManageIQ::Providers::Openstack::RefreshParserCommon::HelperMethods
 
   def parse
-    availability_zones
-    cloud_services
-    flavors
-    miq_templates
-    auth_key_pairs
-    orchestration_stacks
-    quotas
-    placement_groups
-    vms
-    cloud_tenants
-    vnfs
-    vnfds
-    host_aggregates
-    volume_templates
-    volume_snapshot_templates
+    tcos_time("parser.cloud_manager.parse", desc: "fase totale di parsing degli oggetti del cloud manager") do
+      tcos_time("parser.cloud.availability_zones", desc: "trasforma le AZ raccolte in oggetti inventory") { availability_zones }
+      tcos_time("parser.cloud.cloud_services", desc: "trasforma i servizi Nova in oggetti inventory") { cloud_services }
+      tcos_time("parser.cloud.flavors", desc: "trasforma i flavor raccolti in oggetti inventory") { flavors }
+      tcos_time("parser.cloud.miq_templates", desc: "trasforma le immagini Glance in template MiQ") { miq_templates }
+      tcos_time("parser.cloud.auth_key_pairs", desc: "trasforma le keypair raccolte in oggetti inventory") { auth_key_pairs }
+      tcos_time("parser.cloud.orchestration_stacks", desc: "trasforma gli stack Heat (con risorse/parametri/output) in oggetti inventory") { orchestration_stacks }
+      tcos_time("parser.cloud.quotas", desc: "trasforma le quote per-tenant raccolte in oggetti inventory") { quotas }
+      tcos_time("parser.cloud.placement_groups", desc: "trasforma i server group Nova in placement group") { placement_groups }
+      tcos_time("parser.cloud.vms", desc: "trasforma le VM raccolte (associazioni, IP, volumi, SG) in oggetti inventory") { vms }
+      tcos_time("parser.cloud.cloud_tenants", desc: "trasforma i tenant Keystone in oggetti inventory") { cloud_tenants }
+      tcos_time("parser.cloud.vnfs", desc: "trasforma le VNF (Tacker) in oggetti inventory") { vnfs }
+      tcos_time("parser.cloud.vnfds", desc: "trasforma i VNF descriptor (Tacker) in oggetti inventory") { vnfds }
+      tcos_time("parser.cloud.host_aggregates", desc: "trasforma gli host aggregate Nova in oggetti inventory") { host_aggregates }
+      tcos_time("parser.cloud.volume_templates", desc: "trasforma i volumi bootable in volume template") { volume_templates }
+      tcos_time("parser.cloud.volume_snapshot_templates", desc: "trasforma gli snapshot di volumi bootable in template") { volume_snapshot_templates }
+    end
   end
 
   # Parse bootable volumes as VolumeTemplates

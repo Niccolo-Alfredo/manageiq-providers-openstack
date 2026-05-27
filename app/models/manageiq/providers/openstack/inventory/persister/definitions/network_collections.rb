@@ -8,59 +8,124 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
     add_network_collection(:network_routers)
 
     add_network_collection(:cloud_subnet_network_ports) do |builder|
+      persister_target = target
       builder.add_properties(:parent_inventory_collections => %i[vms network_ports])
+      builder.add_targeted_arel(
+        lambda do |inventory_collection|
+          # Scope derived from `target.references(...)` instead of the parent
+          # IC's `manager_uuids`: the latter is empty when the framework
+          # evaluates the lambda before the parser has populated the
+          # network_ports IC, which makes the scope `1=0`, hides existing
+          # rows from the persister, and causes UniqueViolation on insert.
+          if persister_target.try(:tenant_scope_active?)
+            tenant_refs = persister_target.try(:references, :cloud_tenants) || []
+            tenant_ids  = inventory_collection.parent.cloud_tenants
+                                              .where(:ems_ref => tenant_refs).pluck(:id)
+            inventory_collection.parent.cloud_subnet_network_ports
+                                .joins(:network_port)
+                                .where(:network_ports => {:cloud_tenant_id => tenant_ids})
+          else
+            port_refs = persister_target.try(:references, :network_ports) || []
+            inventory_collection.parent.cloud_subnet_network_ports
+                                .joins(:network_port)
+                                .where(:network_ports => {:ems_ref => port_refs})
+          end
+        end
+      )
     end
 
     add_network_collection(:firewall_rules) do |builder|
+      persister_target = target
       builder.add_properties(:manager_ref => %i[ems_ref])
-      builder.add_properties(:parent_inventory_collections => %i[security_groups])
+      # cloud_tenants is listed alongside security_groups so the saving
+      # noop check (questions_helper#saving_targeted_child_collection_noop?)
+      # finds at least one parent IC with a non-blank targeted_scope on
+      # Neutron rule events. The event parser only adds a :cloud_tenants
+      # ref (never a :security_groups ref), which left security_groups'
+      # targeted_scope empty and made firewall_rules a noop - rules
+      # fetched from Neutron were silently dropped by the saver. The
+      # explicit targeted_arel below still scopes the diff to the tenant,
+      # so the actual DB scope is unchanged.
+      builder.add_properties(:parent_inventory_collections => %i[security_groups cloud_tenants])
       builder.add_targeted_arel(
         lambda do |inventory_collection|
-          sg_refs = inventory_collection.parent_inventory_collections
-                                        .collect(&:manager_uuids)
-                                        .map(&:to_a)
-                                        .flatten
+          # Same rationale as cloud_subnet_network_ports above: scope from
+          # `target.references(...)` rather than the parent IC's
+          # `manager_uuids`, which would be empty when the lambda is
+          # evaluated before the security_groups IC is populated and would
+          # cause UniqueViolation on insert. Mirrors the two collector
+          # branches in `Collector::TargetCollection#firewall_rules`.
+          if persister_target.try(:tenant_scope_active?)
+            tenant_refs = persister_target.try(:references, :cloud_tenants) || []
+            tenant_ids  = inventory_collection.parent.cloud_tenants
+                                              .where(:ems_ref => tenant_refs).pluck(:id)
+            sg_ids = inventory_collection.parent.security_groups
+                                         .where(:cloud_tenant_id => tenant_ids).pluck(:id)
+          else
+            sg_refs = persister_target.try(:references, :security_groups) || []
+            sg_ids  = inventory_collection.parent.security_groups
+                                          .where(:ems_ref => sg_refs).pluck(:id)
+          end
           inventory_collection.parent.firewall_rules
-                              .joins(:resource)
-                              .where('security_groups.ems_ref' => sg_refs)
+                              .where(:resource_type => "SecurityGroup",
+                                     :resource_id   => sg_ids)
         end
       )
     end
 
     add_network_collection(:network_ports) do |builder|
+      persister_target = target
       builder.add_properties(:delete_method => :disconnect_port)
       builder.add_properties(:parent_inventory_collections => %i[cloud_tenants])
       builder.add_targeted_arel(
         lambda do |inventory_collection|
-          tenant_refs = inventory_collection.parent_inventory_collections
-                                            .collect(&:manager_uuids)
-                                            .map(&:to_a)
-                                            .flatten
-          inventory_collection.parent.network_ports
-                              .joins(:cloud_tenant)
-                              .where('cloud_tenants.ems_ref' => tenant_refs)
+          # When the refresh was triggered by a CloudTenant, the collector
+          # fetched ALL ports of that tenant from Neutron, so we can safely
+          # scope the delete to the tenant. When the trigger is a VM/Volume,
+          # the collector only fetched the ports referenced by that VM, so we
+          # must restrict deletion to those explicit ems_refs - otherwise
+          # every other port of the tenant would be wiped.
+          # Tenant refs come from `target.references(:cloud_tenants)` rather
+          # than the parent IC's `manager_uuids` for the same reason as
+          # cloud_subnet_network_ports above (parent IC may be empty at
+          # lambda evaluation time).
+          if persister_target.try(:tenant_scope_active?)
+            tenant_refs = persister_target.try(:references, :cloud_tenants) || []
+            tenant_ids  = inventory_collection.parent.cloud_tenants
+                                              .where(:ems_ref => tenant_refs).pluck(:id)
+            inventory_collection.parent.network_ports
+                                .where(:cloud_tenant_id => tenant_ids)
+          else
+            port_refs = persister_target.try(:references, :network_ports) || []
+            inventory_collection.parent.network_ports
+                                .where(:ems_ref => port_refs)
+          end
         end
       )
     end
 
     add_network_collection(:security_groups) do |builder|
+      persister_target = target
       builder.add_properties(:parent_inventory_collections => %i[cloud_tenants])
       builder.add_targeted_arel(
         lambda do |inventory_collection|
-          tenant_refs = inventory_collection.parent_inventory_collections
-                                            .collect(&:manager_uuids)
-                                            .map(&:to_a)
-                                            .flatten
-          inventory_collection.parent.security_groups
-                              .joins(:cloud_tenant)
-                              .where('cloud_tenants.ems_ref' => tenant_refs)
+          # See network_ports above for the rationale: tenant-triggered
+          # refreshes can reconcile by tenant, VM/Volume-triggered refreshes
+          # must restrict delete scope to the SGs explicitly referenced to
+          # avoid wiping the rest of the tenant's security groups.
+          if persister_target.try(:tenant_scope_active?)
+            tenant_refs = persister_target.try(:references, :cloud_tenants) || []
+            tenant_ids  = inventory_collection.parent.cloud_tenants
+                                              .where(:ems_ref => tenant_refs).pluck(:id)
+            inventory_collection.parent.security_groups
+                                .where(:cloud_tenant_id => tenant_ids)
+          else
+            sg_refs = persister_target.try(:references, :security_groups) || []
+            inventory_collection.parent.security_groups
+                                .where(:ems_ref => sg_refs)
+          end
         end
       )
-      # targeted refresh workaround-- always refresh the whole security group collection
-      # regardless of whether this is a TargetCollection or not
-      # because OpenStack doesn't give us UUIDs of new or changed security groups,
-      # we just get an event that one of them changed
-      builder.add_properties(:targeted => false) if references(:security_groups).present?
     end
   end
 end
