@@ -37,7 +37,16 @@ module ManageIQ::Providers::Openstack::Inventory::Persister::Definitions::Networ
     add_network_collection(:firewall_rules) do |builder|
       persister_target = target
       builder.add_properties(:manager_ref => %i[ems_ref])
-      builder.add_properties(:parent_inventory_collections => %i[security_groups])
+      # cloud_tenants is listed alongside security_groups so the saving
+      # noop check (questions_helper#saving_targeted_child_collection_noop?)
+      # finds at least one parent IC with a non-blank targeted_scope on
+      # Neutron rule events. The event parser only adds a :cloud_tenants
+      # ref (never a :security_groups ref), which left security_groups'
+      # targeted_scope empty and made firewall_rules a noop - rules
+      # fetched from Neutron were silently dropped by the saver. The
+      # explicit targeted_arel below still scopes the diff to the tenant,
+      # so the actual DB scope is unchanged.
+      builder.add_properties(:parent_inventory_collections => %i[security_groups cloud_tenants])
       builder.add_targeted_arel(
         lambda do |inventory_collection|
           # Same rationale as cloud_subnet_network_ports above: scope from
